@@ -3,8 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin - Redirecionando...</title>
-    <meta http-equiv="refresh" content="0; url=https://comshalom-rss-monitor.tominaga.workers.dev/admin">
+    <title>Admin - Acesso ao Painel</title>
+    <script>
+        // Redireciona automaticamente após 2 segundos
+        setTimeout(function() {
+            window.location.href = 'https://comshalom-rss-monitor.tominaga.workers.dev/admin';
+        }, 2000);
+    </script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -22,7 +27,7 @@
             background: white;
             border-radius: 12px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            max-width: 500px;
+            max-width: 600px;
         }
         h1 {
             margin-bottom: 20px;
@@ -31,14 +36,38 @@
         p {
             color: #86868b;
             margin-bottom: 20px;
+            line-height: 1.6;
         }
-        a {
-            color: #0071e3;
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            background: #0071e3;
+            color: white;
             text-decoration: none;
+            border-radius: 8px;
             font-weight: 500;
+            margin: 10px;
+            transition: background 0.2s;
         }
-        a:hover {
-            text-decoration: underline;
+        .btn:hover {
+            background: #0051a5;
+        }
+        .info-box {
+            background: #f5f5f7;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            text-align: left;
+        }
+        .info-box code {
+            background: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 0.9em;
+            display: block;
+            margin: 10px 0;
+            word-break: break-all;
         }
         .spinner {
             border: 3px solid #f3f3f3;
@@ -59,11 +88,25 @@
     <div class="container">
         <h1>🔐 Painel Administrativo</h1>
         <div class="spinner"></div>
-        <p>Redirecionando para o Worker...</p>
-        <p>Se não redirecionar automaticamente, <a href="https://comshalom-rss-monitor.tominaga.workers.dev/admin">clique aqui</a></p>
-        <p style="font-size: 0.9em; margin-top: 30px; color: #86868b;">
-            <strong>Nota:</strong> O painel admin está disponível apenas no Worker.<br>
-            URL: <code style="background: #f5f5f7; padding: 2px 6px; border-radius: 4px;">https://comshalom-rss-monitor.tominaga.workers.dev/admin</code>
+        <p><strong>Redirecionando para o Worker...</strong></p>
+        
+        <div class="info-box">
+            <p><strong>⚠️ Importante:</strong></p>
+            <p>O painel admin está disponível apenas no Cloudflare Worker, não no GitHub Pages.</p>
+            <p><strong>URL do Worker:</strong></p>
+            <code>https://comshalom-rss-monitor.tominaga.workers.dev/admin</code>
+            <p style="margin-top: 15px;"><strong>Como acessar:</strong></p>
+            <ol style="text-align: left; margin-left: 20px; color: #1d1d1f;">
+                <li>Acesse a URL do Worker acima</li>
+                <li>Adicione o header <code>X-ADMIN-KEY</code> com sua chave</li>
+                <li>Ou use uma extensão como ModHeader para adicionar o header automaticamente</li>
+            </ol>
+        </div>
+        
+        <a href="https://comshalom-rss-monitor.tominaga.workers.dev/admin" class="btn">Acessar Painel Admin</a>
+        
+        <p style="font-size: 0.85em; margin-top: 30px; color: #86868b;">
+            Se não redirecionar automaticamente em 2 segundos, clique no botão acima.
         </p>
     </div>
 </body>
