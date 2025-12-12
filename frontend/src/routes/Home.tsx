@@ -23,40 +23,45 @@ export default function Home() {
     return '';
   });
 
-  // Auto-refresh a cada 5 minutos
+  // Auto-refresh e redirecionamento automático
   onMount(() => {
-    const interval = setInterval(() => {
+    let redirectExecuted = false;
+    
+    // Auto-refresh a cada 5 minutos
+    const refreshInterval = setInterval(() => {
       if (communiques.refetch) {
         communiques.refetch();
       }
     }, 5 * 60 * 1000);
-    return () => clearInterval(interval);
-  });
 
-  // Redireciona automaticamente quando os comunicados carregarem
-  onMount(() => {
-    // Aguarda um pouco para garantir que o loading apareça
-    const checkAndRedirect = () => {
+    // Verifica periodicamente se os dados carregaram para redirecionar
+    const checkInterval = setInterval(() => {
+      if (redirectExecuted) {
+        clearInterval(checkInterval);
+        return;
+      }
+      
       const url = redirectUrl();
       if (url && !communiques.loading && communiques() && !communiques.error) {
+        redirectExecuted = true;
+        clearInterval(checkInterval);
         // Pequeno delay para mostrar a mensagem de redirecionamento
         setTimeout(() => {
           window.location.href = url;
         }, 1000);
       }
-    };
-
-    // Verifica periodicamente se os dados carregaram
-    const interval = setInterval(() => {
-      checkAndRedirect();
     }, 100);
 
-    // Limpa o intervalo quando redirecionar ou após 10 segundos
-    setTimeout(() => {
-      clearInterval(interval);
+    // Limpa o intervalo de verificação após 10 segundos (timeout de segurança)
+    const timeoutId = setTimeout(() => {
+      clearInterval(checkInterval);
     }, 10000);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(refreshInterval);
+      clearInterval(checkInterval);
+      clearTimeout(timeoutId);
+    };
   });
 
   return (

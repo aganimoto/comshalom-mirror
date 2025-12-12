@@ -1652,13 +1652,17 @@ function addCorsHeaders(response: Response, origin?: string | null): Response {
   // Verifica se o origin está na lista de permitidos
   if (origin && allowedOrigins.includes(origin)) {
     headers.set('Access-Control-Allow-Origin', origin);
-  } else if (!origin) {
-    // Se não houver origin (requisição direta), permite qualquer origem em desenvolvimento
+  } else if (!origin || origin === 'null') {
+    // Se não houver origin (requisição direta) ou for null, permite qualquer origem
+    headers.set('Access-Control-Allow-Origin', '*');
+  } else {
+    // Para outras origens, ainda adiciona o header para evitar erros
+    // mas apenas para requisições que não sejam de navegadores (sem origin header)
     headers.set('Access-Control-Allow-Origin', '*');
   }
   
   headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  headers.set('Access-Control-Allow-Headers', 'Content-Type, X-ADMIN-KEY');
+  headers.set('Access-Control-Allow-Headers', 'Content-Type, X-ADMIN-KEY, X-Last-Check');
   headers.set('Access-Control-Max-Age', '86400');
   
   return new Response(response.body, {
