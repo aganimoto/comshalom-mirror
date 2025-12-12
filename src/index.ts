@@ -988,42 +988,99 @@ async function processItem(
 // Verifica se o conteúdo de uma URL é válido (não é página de erro)
 async function isValidContent(html: string): Promise<boolean> {
   if (!html || html.trim().length === 0) {
+    logger.warn('isValidContent: HTML vazio ou nulo');
     return false;
   }
   
   const lowerHtml = html.toLowerCase();
   
-  // Lista de indicadores de página de erro
-  const errorIndicators = [
-    'página não foi encontrada',
-    'página não encontrada',
-    'page not found',
-    '404',
-    'erro 404',
-    'não encontrado',
-    'not found',
-    'página indisponível',
-    'página não disponível',
-    'conteúdo não disponível',
-    'erro ao carregar',
-    'não foi possível encontrar',
-    'esta página não existe'
-  ];
+  // Extrai texto do HTML (remove tags)
+  const textContent = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  const textLength = textContent.length;
   
-  // Verifica se contém algum indicador de erro
-  for (const indicator of errorIndicators) {
-    if (lowerHtml.includes(indicator)) {
-      return false;
-    }
-  }
+  logger.info('isValidContent: Verificando conteúdo', { 
+    htmlLength: html.length, 
+    textLength,
+    preview: textContent.substring(0, 100) 
+  });
   
-  // Verifica se tem conteúdo mínimo (pelo menos 200 caracteres de texto)
-  const textContent = html.replace(/<[^>]*>/g, '').trim();
-  if (textContent.length < 200) {
+  // Verifica se tem conteúdo mínimo (pelo menos 100 caracteres de texto)
+  // Reduzido de 200 para 100 para ser mais flexível
+  if (textLength < 100) {
+    logger.warn('isValidContent: Conteúdo muito curto', { textLength });
     return false;
   }
   
-  return true;
+  // Lista de indicadores de página de erro (mais específicos)
+  // Verifica se o indicador aparece em contexto de erro (título, heading, ou mensagem de erro)
+  const errorPatterns = [
+    /<title[^>]*>.*(?:página não foi encontrada|página não encontrada|page not found|404|erro 404|não encontrado|not found|página indisponível|página não disponível|conteúdo não disponível|erro ao carregar|não foi possível encontrar|esta página não existe).*<\/title>/i,
+    /<h[1-6][^>]*>.*(?:página não foi encontrada|página não encontrada|page not found|404|erro 404|não encontrado|not found|página indisponível|página não disponível|conteúdo não disponível|erro ao carregar|não foi possível encontrar|esta página não existe).*<\/h[1-6]>/i,
+    /(?:página não foi encontrada|página não encontrada|page not found|erro 404|não encontrado|not found|página indisponível|página não disponível|conteúdo não disponível|erro ao carregar|não foi possível encontrar|esta página não existe)/i
+  ];
+  
+  // Verifica se algum padrão de erro está presente
+  for (const pattern of errorPatterns) {
+    if (pattern.test(html)) {
+      logger.warn('isValidContent: Padrão de erro detectado', { 
+        pattern: pattern.toString(),
+        textLength 
+      });
+      // Mas não rejeita imediatamente - verifica se há conteúdo suficiente além do erro
+      // Se o texto tem mais de 500 caracteres, provavelmente não é só uma página de erro
+      if (textLength < 500) {
+        return false;
+      }
+      // Se tem mais de 500 caracteres, pode ser uma página com conteúdo mas que menciona erro
+      // Verifica se tem elementos de conteúdo real
+      break;
+    }
+  }
+  
+  // Verifica se tem elementos de conteúdo real (títulos, parágrafos, listas)
+  const hasContentElements = /<h[1-6][^>]*>|<p[^>]*>|<article[^>]*>|<section[^>]*>|<div[^>]*class[^>]*content|<main[^>]*>/i.test(html);
+  
+  if (!hasContentElements && textLength < 300) {
+    logger.warn('isValidContent: Sem elementos de conteúdo e texto muito curto', { 
+      textLength,
+      hasContentElements 
+    });
+    return false;
+  }
+  
+  // Verifica se tem palavras-chave que indicam conteúdo real (não apenas erro)
+  const contentKeywords = ['comunicado', 'discernimento', 'comissão', 'nomeação', 'transferência', 'fundação', 'missão'];
+  const hasContentKeywords = contentKeywords.some(keyword => lowerHtml.includes(keyword));
+  
+  if (hasContentKeywords) {
+    logger.info('isValidContent: Palavras-chave de conteúdo encontradas', { 
+      textLength,
+      hasContentKeywords 
+    });
+    return true;
+  }
+  
+  // Se tem bastante conteúdo (mais de 500 caracteres) e elementos HTML, provavelmente é válido
+  if (textLength >= 500 && hasContentElements) {
+    logger.info('isValidContent: Conteúdo suficiente e elementos HTML presentes', { 
+      textLength,
+      hasContentElements 
+    });
+    return true;
+  }
+  
+  // Se tem mais de 300 caracteres, aceita (pode ser conteúdo válido)
+  if (textLength >= 300) {
+    logger.info('isValidContent: Conteúdo aceito por tamanho', { textLength });
+    return true;
+  }
+  
+  logger.warn('isValidContent: Conteúdo rejeitado', { 
+    textLength,
+    hasContentElements,
+    hasContentKeywords 
+  });
+  return false;
 }
 
 // Extrai título do HTML
