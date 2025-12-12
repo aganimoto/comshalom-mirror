@@ -445,13 +445,179 @@ async function commitToGitHub(
   throw new Error('Failed to commit to GitHub after retries');
 }
 
-// Envia email via Mailchannels com retry e validação
+// Funções auxiliares para email
+function truncateText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return text.substring(0, maxLength - 3) + '...';
+}
+
+function extractTextPreview(html: string, maxWords: number = 50): string {
+  // Remove tags HTML e extrai texto
+  const text = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  const words = text.split(' ');
+  if (words.length <= maxWords) return text;
+  return words.slice(0, maxWords).join(' ') + '...';
+}
+
+function formatDate(timestamp: string | undefined | null): string {
+  if (!timestamp) return 'Data não disponível';
+  try {
+    const date = new Date(timestamp);
+    if (isNaN(date.getTime())) return 'Data inválida';
+    return date.toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  } catch {
+    return 'Data inválida';
+  }
+}
+
+function generateEmailHTML(communique: Communique, githubUrl: string): string {
+  const safeTitle = escapeHtml(communique.title);
+  const safeUrl = escapeHtml(communique.url);
+  const safeGithubUrl = escapeHtml(githubUrl);
+  const preview = extractTextPreview(communique.html, 50);
+  const formattedDate = formatDate(communique.timestamp);
+  
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Novo Comunicado: ${safeTitle}</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f5f5f7;">
+    <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #f5f5f7;">
+        <tr>
+            <td style="padding: 20px 0;">
+                <table role="presentation" style="width: 100%; max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                    <!-- Header -->
+                    <tr>
+                        <td style="padding: 30px 30px 20px; background: linear-gradient(135deg, #0071e3 0%, #5ac8fa 100%); border-radius: 8px 8px 0 0;">
+                            <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 600; line-height: 1.3;">
+                                📄 Novo Comunicado Detectado
+                            </h1>
+                        </td>
+                    </tr>
+                    
+                    <!-- Content -->
+                    <tr>
+                        <td style="padding: 30px;">
+                            <h2 style="margin: 0 0 20px; color: #1d1d1f; font-size: 20px; font-weight: 600; line-height: 1.4;">
+                                ${safeTitle}
+                            </h2>
+                            
+                            <!-- Preview -->
+                            <div style="background-color: #f9f9f9; border-left: 4px solid #0071e3; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                                <p style="margin: 0; color: #86868b; font-size: 14px; line-height: 1.6;">
+                                    ${escapeHtml(preview)}
+                                </p>
+                            </div>
+                            
+                            <!-- Info Cards -->
+                            <table role="presentation" style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+                                <tr>
+                                    <td style="padding: 12px; background-color: #f9f9f9; border-radius: 6px; margin-bottom: 8px;">
+                                        <strong style="color: #1d1d1f; font-size: 13px; display: block; margin-bottom: 4px;">📅 Data</strong>
+                                        <span style="color: #86868b; font-size: 14px;">${formattedDate}</span>
+                                    </td>
+                                </tr>
+                                ${communique.githubSha ? `
+                                <tr>
+                                    <td style="padding: 12px; background-color: #f9f9f9; border-radius: 6px; margin-top: 8px;">
+                                        <strong style="color: #1d1d1f; font-size: 13px; display: block; margin-bottom: 4px;">🔗 Commit SHA</strong>
+                                        <span style="color: #86868b; font-size: 12px; font-family: monospace;">${escapeHtml(communique.githubSha.substring(0, 7))}</span>
+                                    </td>
+                                </tr>
+                                ` : ''}
+                            </table>
+                            
+                            <!-- Action Buttons -->
+                            <table role="presentation" style="width: 100%; border-collapse: collapse; margin: 30px 0;">
+                                <tr>
+                                    <td style="padding: 0;">
+                                        <a href="${safeGithubUrl}" style="display: inline-block; padding: 14px 28px; background-color: #0071e3; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 15px; text-align: center; margin-bottom: 10px; width: 100%; box-sizing: border-box;">
+                                            🔗 Ver Página Completa
+                                        </a>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 0;">
+                                        <a href="${safeUrl}" style="display: inline-block; padding: 12px 28px; background-color: #f5f5f7; color: #0071e3; text-decoration: none; border-radius: 8px; font-weight: 500; font-size: 14px; text-align: center; width: 100%; box-sizing: border-box; border: 1px solid #e5e5e7;">
+                                            🌐 Fonte Original
+                                        </a>
+                                    </td>
+                                </tr>
+                                ${communique.githubUrl && communique.githubUrl !== githubUrl ? `
+                                <tr>
+                                    <td style="padding: 8px 0 0;">
+                                        <a href="${escapeHtml(communique.githubUrl)}" style="display: inline-block; padding: 10px 20px; color: #86868b; text-decoration: none; font-size: 13px; text-align: center; width: 100%; box-sizing: border-box;">
+                                            📦 Ver no GitHub
+                                        </a>
+                                    </td>
+                                </tr>
+                                ` : ''}
+                            </table>
+                        </td>
+                    </tr>
+                    
+                    <!-- Footer -->
+                    <tr>
+                        <td style="padding: 20px 30px; background-color: #f9f9f9; border-radius: 0 0 8px 8px; border-top: 1px solid #e5e5e7;">
+                            <p style="margin: 0; color: #86868b; font-size: 12px; text-align: center; line-height: 1.5;">
+                                Este é um email automático do sistema de monitoramento RSS do ComShalom.<br>
+                                <a href="${safeGithubUrl}" style="color: #0071e3; text-decoration: none;">Ver comunicado completo</a>
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>`;
+}
+
+function generateEmailText(communique: Communique, githubUrl: string): string {
+  const formattedDate = formatDate(communique.timestamp);
+  const preview = extractTextPreview(communique.html, 50);
+  
+  return `NOVO COMUNICADO DETECTADO
+
+Título: ${communique.title}
+
+Preview:
+${preview}
+
+Data: ${formattedDate}
+${communique.githubSha ? `Commit SHA: ${communique.githubSha.substring(0, 7)}\n` : ''}
+
+Links:
+- Página Completa: ${githubUrl}
+- Fonte Original: ${communique.url}
+${communique.githubUrl && communique.githubUrl !== githubUrl ? `- GitHub: ${communique.githubUrl}\n` : ''}
+
+---
+Este é um email automático do sistema de monitoramento RSS do ComShalom.`;
+}
+
+// Envia email via Mailchannels com retry, validação e melhorias
 async function sendEmail(
   env: Env,
   communique: Communique,
   githubUrl: string,
   retries = 2
 ): Promise<void> {
+  // Verifica se email está habilitado
+  if (env.EMAIL_ENABLED === 'false') {
+    logger.debug('Email desabilitado via EMAIL_ENABLED=false');
+    return;
+  }
+
   if (!env.EMAIL_FROM || !env.EMAIL_TO) {
     logger.warn('Email não configurado, pulando envio');
     return;
@@ -479,9 +645,16 @@ async function sendEmail(
     return;
   }
 
+  // Trunca assunto para evitar problemas
+  const subject = `Novo Comunicado: ${truncateText(communique.title, 50)}`;
+
+  // Gera conteúdo HTML e texto
+  const htmlContent = generateEmailHTML(communique, githubUrl);
+  const textContent = generateEmailText(communique, githubUrl);
+
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const emailContent = {
+      const emailContent: any = {
         personalizations: [{
           to: recipients.map(email => ({ email }))
         }],
@@ -489,29 +662,31 @@ async function sendEmail(
           email: env.EMAIL_FROM,
           name: 'ComShalom RSS Monitor'
         },
-        subject: `Novo Comunicado Detectado: ${communique.title}`,
-        content: [{
+        subject: subject,
+        content: [
+          {
+            type: 'text/plain',
+            value: textContent
+          },
+          {
           type: 'text/html',
-          value: `
-            <h2>Novo Comunicado Detectado</h2>
-            <p><strong>Título:</strong> ${communique.title}</p>
-            <p><strong>URL Original:</strong> <a href="${communique.url}">${communique.url}</a></p>
-            <p><strong>Data:</strong> ${communique.timestamp ? (() => {
-                try {
-                    const date = new Date(communique.timestamp);
-                    return isNaN(date.getTime()) ? 'Data inválida' : date.toLocaleString('pt-BR');
-                } catch {
-                    return 'Data inválida';
-                }
-            })() : 'Data não disponível'}</p>
-            <p><strong>Commit SHA:</strong> ${communique.githubSha || 'N/A'}</p>
-            <p><strong>URL Pública:</strong> <a href="${githubUrl}">${githubUrl}</a></p>
-            ${communique.githubUrl && communique.githubUrl !== githubUrl ? `<p><strong>GitHub:</strong> <a href="${communique.githubUrl}">${communique.githubUrl}</a></p>` : ''}
-            <hr>
-            <p><small>Este é um email automático do sistema de monitoramento RSS do ComShalom.</small></p>
-          `
-        }]
+            value: htmlContent
+          }
+        ],
+        headers: {
+          'X-ComShalom-Id': communique.id,
+          'X-ComShalom-Type': 'new-communique',
+          'List-Unsubscribe': `<${githubUrl}>`,
+          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+        }
       };
+
+      // Adiciona reply-to se configurado
+      if (env.EMAIL_REPLY_TO && isValidEmail(env.EMAIL_REPLY_TO)) {
+        emailContent.reply_to = {
+          email: env.EMAIL_REPLY_TO
+        };
+      }
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
@@ -532,13 +707,25 @@ async function sendEmail(
         throw new Error(`Mailchannels error: ${response.status} - ${error}`);
       }
       
+      // Log de sucesso
+      logger.info('Email enviado com sucesso', { 
+        id: communique.id, 
+        title: communique.title,
+        recipients: recipients.length,
+        subject: subject
+      });
+      
       return; // Sucesso
     } catch (error) {
       if (attempt === retries) {
-        logger.error('Erro ao enviar email após retries', { error: String(error) });
+        logger.error('Erro ao enviar email após retries', { 
+          error: String(error),
+          id: communique.id,
+          title: communique.title
+        });
         throw error;
       }
-      // Espera antes de tentar novamente
+      // Espera antes de tentar novamente (backoff exponencial)
       await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
     }
   }
@@ -629,11 +816,29 @@ async function processItem(
     // Atualiza no KV com informações do GitHub
     await env.COMMUNIQUE_STORE.put(id, JSON.stringify(communique));
 
-    // Envia email
+    // Envia email (não crítico - não deve quebrar o processamento)
+    try {
     await sendEmail(env, communique, githubResult.url);
+    } catch (error) {
+      logger.error('Falha ao enviar email, mas processamento continua', { 
+        id, 
+        title: item.title,
+        error: String(error)
+      });
+      // Continua o processamento mesmo se email falhar
+    }
     
-    // Envia notificações push
+    // Envia notificações push (não crítico)
+    try {
     await sendPushNotifications(env, communique, githubResult.url);
+    } catch (error) {
+      logger.error('Falha ao enviar notificação push, mas processamento continua', { 
+        id, 
+        title: item.title,
+        error: String(error)
+      });
+      // Continua o processamento mesmo se push falhar
+    }
     
     logger.info('Comunicado processado com sucesso', { id, title: item.title });
     return { success: true };
@@ -958,7 +1163,7 @@ async function requireAdmin(env: Env, request: Request): Promise<Response | null
   }
 
   // Fallback para header (compatibilidade)
-  const authHeader = request.headers.get('X-ADMIN-KEY');
+    const authHeader = request.headers.get('X-ADMIN-KEY');
   if (authHeader && authHeader === env.ADMIN_KEY) {
     return null; // Autenticado via header
   }
@@ -983,9 +1188,9 @@ async function requireAdmin(env: Env, request: Request): Promise<Response | null
     error: 'Unauthorized',
     message: 'Autenticação necessária. Acesse /admin/login'
   }), {
-    status: 401,
-    headers: { 'Content-Type': 'application/json' }
-  });
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      });
 }
 
 // Helper para adicionar headers CORS
@@ -2328,7 +2533,7 @@ router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) =
             try {
                 const response = await fetch('/admin/list?limit=100');
                 if (!response.ok) throw new Error('Erro ao carregar');
-                const data = await response.json();
+    const data = await response.json();
                 allCommuniques = data.items || [];
                 renderCommuniques(allCommuniques);
             } catch (error) {
@@ -2744,9 +2949,9 @@ router.get('/', async (request: Request, env: Env, ctx: ExecutionContext) => {
         <div id="communiques-list" class="communiques-list" style="display: none;"></div>
 
         <div id="empty-state" class="empty-state" style="display: none;">
-            <h2>Nenhum comunicado encontrado</h2>
-            <p>Os comunicados aparecerão aqui quando forem detectados pelo sistema.</p>
-        </div>
+                <h2>Nenhum comunicado encontrado</h2>
+                <p>Os comunicados aparecerão aqui quando forem detectados pelo sistema.</p>
+            </div>
     </div>
 
     <script>
@@ -2842,15 +3047,15 @@ router.get('/', async (request: Request, env: Env, ctx: ExecutionContext) => {
                 let formattedDate = 'Data inválida';
                 if (item.timestamp) {
                     try {
-                        const date = new Date(item.timestamp);
+                const date = new Date(item.timestamp);
                         if (!isNaN(date.getTime())) {
                             formattedDate = date.toLocaleDateString('pt-BR', {
-                                day: '2-digit',
-                                month: '2-digit',
-                                year: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit'
-                            });
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
                         }
                     } catch (e) {
                         // Mantém 'Data inválida'

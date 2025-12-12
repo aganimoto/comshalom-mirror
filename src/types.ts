@@ -6,6 +6,8 @@ export interface Env {
   ADMIN_KEY?: string;
   EMAIL_FROM?: string;
   EMAIL_TO?: string; // Pode ser múltiplos emails separados por vírgula
+  EMAIL_ENABLED?: string; // "false" para desabilitar emails
+  EMAIL_REPLY_TO?: string; // Email para reply-to (opcional)
   CUSTOM_DOMAIN?: string; // Domínio customizado do GitHub Pages (ex: go.tomina.ga)
   PATTERNS?: string; // Padrões de busca separados por vírgula (opcional, senão usa padrão). Use "*" para processar todos
   RSS_FEEDS?: string; // URLs de feeds RSS separadas por vírgula (opcional, senão usa feed padrão)
