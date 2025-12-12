@@ -10,12 +10,12 @@ import './Home.css';
 export default function Home() {
   const communiques = useCommuniques();
   const { search, setSearch, filtered, hasResults, resultCount } = useSearch(
-    () => communiques()?.items || []
+    () => communiques.items
   );
 
   // URL do comunicado mais recente para redirecionamento
   const redirectUrl = createMemo(() => {
-    const items = communiques()?.items;
+    const items = communiques.items;
     if (items && items.length > 0) {
       // Prioriza publicUrl, depois githubUrl
       return items[0].publicUrl || items[0].githubUrl || '';
@@ -42,7 +42,8 @@ export default function Home() {
       }
       
       const url = redirectUrl();
-      if (url && !communiques.loading && communiques() && !communiques.error) {
+      const data = communiques.value;
+      if (url && !communiques.loading && data && !communiques.error) {
         redirectExecuted = true;
         clearInterval(checkInterval);
         // Pequeno delay para mostrar a mensagem de redirecionamento
@@ -67,13 +68,13 @@ export default function Home() {
   return (
     <div class="container">
       <Header
-        communiques={communiques()}
+        communiques={communiques.value}
         loading={communiques.loading}
         error={communiques.error}
         redirectUrl={redirectUrl()}
       />
 
-      <Show when={communiques() && !communiques.loading && !communiques.error}>
+      <Show when={communiques.value && !communiques.loading && !communiques.error}>
         <SearchBar
           value={search()}
           onInput={setSearch}
