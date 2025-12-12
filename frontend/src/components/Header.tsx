@@ -9,6 +9,7 @@ interface Props {
   communiques: CommuniquesResponse | undefined;
   loading: boolean;
   error: Error | unknown;
+  redirectUrl?: string;
 }
 
 export default function Header(props: Props) {
@@ -36,7 +37,7 @@ export default function Header(props: Props) {
         <p class="subtitle">Comunidade Católica Shalom</p>
         
         <Show when={props.loading}>
-          <Loading />
+          <Loading redirectUrl={props.redirectUrl} />
         </Show>
 
         <Show when={props.error}>

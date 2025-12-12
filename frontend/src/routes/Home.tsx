@@ -1,4 +1,4 @@
-import { Show, For, onMount } from 'solid-js';
+import { Show, For, onMount, createMemo } from 'solid-js';
 import { useCommuniques } from '../hooks/useCommuniques';
 import { useSearch } from '../hooks/useSearch';
 import Header from '../components/Header';
@@ -13,6 +13,16 @@ export default function Home() {
     () => communiques()?.items || []
   );
 
+  // URL do comunicado mais recente para redirecionamento
+  const redirectUrl = createMemo(() => {
+    const items = communiques()?.items;
+    if (items && items.length > 0) {
+      // Prioriza publicUrl, depois githubUrl
+      return items[0].publicUrl || items[0].githubUrl || '';
+    }
+    return '';
+  });
+
   // Auto-refresh a cada 5 minutos
   onMount(() => {
     const interval = setInterval(() => {
@@ -23,12 +33,39 @@ export default function Home() {
     return () => clearInterval(interval);
   });
 
+  // Redireciona automaticamente quando os comunicados carregarem
+  onMount(() => {
+    // Aguarda um pouco para garantir que o loading apareça
+    const checkAndRedirect = () => {
+      const url = redirectUrl();
+      if (url && !communiques.loading && communiques() && !communiques.error) {
+        // Pequeno delay para mostrar a mensagem de redirecionamento
+        setTimeout(() => {
+          window.location.href = url;
+        }, 1000);
+      }
+    };
+
+    // Verifica periodicamente se os dados carregaram
+    const interval = setInterval(() => {
+      checkAndRedirect();
+    }, 100);
+
+    // Limpa o intervalo quando redirecionar ou após 10 segundos
+    setTimeout(() => {
+      clearInterval(interval);
+    }, 10000);
+
+    return () => clearInterval(interval);
+  });
+
   return (
     <div class="container">
       <Header
         communiques={communiques()}
         loading={communiques.loading}
         error={communiques.error}
+        redirectUrl={redirectUrl()}
       />
 
       <Show when={communiques() && !communiques.loading && !communiques.error}>
