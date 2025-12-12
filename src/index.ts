@@ -180,7 +180,14 @@ function generateFullPageHTML(communique: Communique): string {
         <div class="header-content">
             <h1>${safeTitle}</h1>
             <div class="header-meta">
-                <span>📅 ${new Date(communique.timestamp).toLocaleString('pt-BR')}</span>
+                <span>📅 ${communique.timestamp ? (() => {
+                    try {
+                        const date = new Date(communique.timestamp);
+                        return isNaN(date.getTime()) ? 'Data inválida' : date.toLocaleString('pt-BR');
+                    } catch {
+                        return 'Data inválida';
+                    }
+                })() : 'Data não disponível'}</span>
                 ${safeUrl ? `<a href="${safeUrl}" target="_blank">🌐 Fonte Original</a>` : ''}
             </div>
         </div>
@@ -489,7 +496,14 @@ async function sendEmail(
             <h2>Novo Comunicado Detectado</h2>
             <p><strong>Título:</strong> ${communique.title}</p>
             <p><strong>URL Original:</strong> <a href="${communique.url}">${communique.url}</a></p>
-            <p><strong>Data:</strong> ${new Date(communique.timestamp).toLocaleString('pt-BR')}</p>
+            <p><strong>Data:</strong> ${communique.timestamp ? (() => {
+                try {
+                    const date = new Date(communique.timestamp);
+                    return isNaN(date.getTime()) ? 'Data inválida' : date.toLocaleString('pt-BR');
+                } catch {
+                    return 'Data inválida';
+                }
+            })() : 'Data não disponível'}</p>
             <p><strong>Commit SHA:</strong> ${communique.githubSha || 'N/A'}</p>
             <p><strong>URL Pública:</strong> <a href="${githubUrl}">${githubUrl}</a></p>
             ${communique.githubUrl && communique.githubUrl !== githubUrl ? `<p><strong>GitHub:</strong> <a href="${communique.githubUrl}">${communique.githubUrl}</a></p>` : ''}
@@ -1488,7 +1502,14 @@ function renderCommuniqueHTML(communique: Communique, baseUrl: string, viewUrl: 
         <div class="header-content">
             <h1>${safeTitle}</h1>
             <div class="header-meta">
-                <span>📅 ${new Date(communique.timestamp).toLocaleString('pt-BR')}</span>
+                <span>📅 ${communique.timestamp ? (() => {
+                    try {
+                        const date = new Date(communique.timestamp);
+                        return isNaN(date.getTime()) ? 'Data inválida' : date.toLocaleString('pt-BR');
+                    } catch {
+                        return 'Data inválida';
+                    }
+                })() : 'Data não disponível'}</span>
                 ${publicUrl ? `<a href="${escapeHtml(publicUrl)}" target="_blank">🔗 Ver original</a>` : ''}
                 ${communique.url ? `<a href="${escapeHtml(communique.url)}" target="_blank">🌐 Fonte</a>` : ''}
             </div>
@@ -1618,8 +1639,28 @@ router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) =
       }
     }
 
-    // Ordena por timestamp (mais recentes primeiro)
-    logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    // Helper para validar timestamp
+    function isValidTimestamp(ts: string | undefined | null): boolean {
+      if (!ts) return false;
+      const date = new Date(ts);
+      return !isNaN(date.getTime());
+    }
+    
+    function getTimestamp(ts: string | undefined | null): number {
+      if (!ts) return 0;
+      const date = new Date(ts);
+      return isNaN(date.getTime()) ? 0 : date.getTime();
+    }
+
+    // Ordena por timestamp (mais recentes primeiro), filtrando timestamps inválidos
+    logs.sort((a, b) => {
+      const timeA = getTimestamp(a.timestamp);
+      const timeB = getTimestamp(b.timestamp);
+      if (timeA === 0 && timeB === 0) return 0;
+      if (timeA === 0) return 1; // Sem timestamp vai para o final
+      if (timeB === 0) return -1;
+      return timeB - timeA;
+    });
 
     // Busca lista de comunicados para estatísticas
     const communiqueKeys = await env.COMMUNIQUE_STORE.list();
@@ -1640,17 +1681,19 @@ router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) =
     const last7Days = now - (7 * 24 * 60 * 60 * 1000);
     const last30Days = now - (30 * 24 * 60 * 60 * 1000);
     
-    const communiquesByDate = communiques.map(c => ({
-      ...c,
-      date: new Date(c.timestamp).getTime()
-    }));
+    const communiquesByDate = communiques
+      .filter(c => isValidTimestamp(c.timestamp))
+      .map(c => ({
+        ...c,
+        date: getTimestamp(c.timestamp)
+      }));
     
     const recent7Days = communiquesByDate.filter(c => c.date >= last7Days).length;
     const recent30Days = communiquesByDate.filter(c => c.date >= last30Days).length;
     
     const sortedByDate = [...communiquesByDate].sort((a, b) => b.date - a.date);
     const lastProcessed = sortedByDate[0]?.timestamp || null;
-    const lastProcessedTime = lastProcessed ? new Date(lastProcessed).getTime() : null;
+    const lastProcessedTime = lastProcessed && isValidTimestamp(lastProcessed) ? getTimestamp(lastProcessed) : null;
     const timeSinceLast = lastProcessedTime ? now - lastProcessedTime : null;
     
     // Status do sistema
@@ -1673,9 +1716,15 @@ router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) =
     }
     
     communiquesByDate.forEach(c => {
-      const dateKey = new Date(c.timestamp).toISOString().split('T')[0];
-      if (dailyData.hasOwnProperty(dateKey)) {
-        dailyData[dateKey]++;
+      if (isValidTimestamp(c.timestamp)) {
+        try {
+          const dateKey = new Date(c.timestamp).toISOString().split('T')[0];
+          if (dailyData.hasOwnProperty(dateKey)) {
+            dailyData[dateKey]++;
+          }
+        } catch (e) {
+          // Ignora timestamps inválidos
+        }
       }
     });
     
@@ -2135,7 +2184,7 @@ router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) =
                 </div>
             </div>
             
-            ${stats.lastProcessed ? `
+            ${stats.lastProcessed && isValidTimestamp(stats.lastProcessed) ? `
             <div style="margin-top: 20px; padding: 16px; background: #f9f9f9; border-radius: 8px; font-size: 0.9em; color: #86868b;">
                 <strong>Último processamento:</strong> ${new Date(stats.lastProcessed).toLocaleString('pt-BR')}
                 ${stats.timeSinceLast ? ` (${Math.floor(stats.timeSinceLast / (60 * 60 * 1000))}h atrás)` : ''}
@@ -2170,8 +2219,17 @@ router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) =
         <div class="section">
             <h2>🕐 Atividades Recentes</h2>
             <div class="timeline">
-                ${logs.slice(0, 10).map(log => {
-                    const timeAgo = getTimeAgo(new Date(log.timestamp));
+                ${logs.slice(0, 10).filter(log => isValidTimestamp(log.timestamp)).map(log => {
+                    const logTimestamp = getTimestamp(log.timestamp);
+                    const diff = now - logTimestamp;
+                    const minutes = Math.floor(diff / 60000);
+                    const hours = Math.floor(diff / 3600000);
+                    const days = Math.floor(diff / 86400000);
+                    let timeAgo = 'Agora';
+                    if (minutes >= 1 && minutes < 60) timeAgo = `${minutes} min atrás`;
+                    else if (hours < 24) timeAgo = `${hours}h atrás`;
+                    else if (days > 0) timeAgo = `${days} dias atrás`;
+                    
                     return `
                     <div class="timeline-item">
                         <div class="timeline-content">
@@ -2204,7 +2262,9 @@ router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) =
                         </tr>
                     </thead>
                     <tbody>
-                        ${logs.map(log => `
+                        ${logs.filter(log => isValidTimestamp(log.timestamp)).map(log => {
+                            const logDate = new Date(log.timestamp);
+                            return `
                         <tr>
                             <td>
                                 <span class="badge badge-${log.type}">${log.type === 'view' ? '👁️ Visualização' : '📋 Cópia'}</span>
@@ -2213,13 +2273,14 @@ router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) =
                                 <strong>${escapeHtml(log.communiqueTitle)}</strong><br>
                                 <small style="color: #86868b;">ID: ${log.communiqueId}</small>
                             </td>
-                            <td class="timestamp">${new Date(log.timestamp).toLocaleString('pt-BR')}</td>
+                            <td class="timestamp">${logDate.toLocaleString('pt-BR')}</td>
                             <td class="ip">${log.ip}</td>
                             <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(log.referer)}">
                                 ${log.referer === 'direct' ? '<em>Direto</em>' : escapeHtml(log.referer)}
                             </td>
                         </tr>
-                        `).join('')}
+                        `;
+                        }).join('')}
                     </tbody>
                 </table>
             </div>
@@ -2284,8 +2345,17 @@ router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) =
             }
             
             container.innerHTML = '<div class="communiques-list">' + communiques.map(item => {
-                const date = new Date(item.timestamp);
-                const formattedDate = date.toLocaleString('pt-BR');
+                let formattedDate = 'Data inválida';
+                if (item.timestamp) {
+                    try {
+                        const date = new Date(item.timestamp);
+                        if (!isNaN(date.getTime())) {
+                            formattedDate = date.toLocaleString('pt-BR');
+                        }
+                    } catch (e) {
+                        // Mantém 'Data inválida'
+                    }
+                }
                 return \`
                     <div class="communique-item">
                         <div class="communique-title">\${escapeHtml(item.title)}</div>
@@ -2769,14 +2839,23 @@ router.get('/', async (request: Request, env: Env, ctx: ExecutionContext) => {
                 const card = document.createElement('div');
                 card.className = 'communique-card';
 
-                const date = new Date(item.timestamp);
-                const formattedDate = date.toLocaleDateString('pt-BR', {
-                    day: '2-digit',
-                    month: '2-digit',
-                    year: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit'
-                });
+                let formattedDate = 'Data inválida';
+                if (item.timestamp) {
+                    try {
+                        const date = new Date(item.timestamp);
+                        if (!isNaN(date.getTime())) {
+                            formattedDate = date.toLocaleDateString('pt-BR', {
+                                day: '2-digit',
+                                month: '2-digit',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                            });
+                        }
+                    } catch (e) {
+                        // Mantém 'Data inválida'
+                    }
+                }
 
                 // SEMPRE prioriza página interna (publicUrl ou githubUrl) como link principal
                 const internalUrl = item.publicUrl || item.githubUrl;
