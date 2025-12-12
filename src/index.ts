@@ -670,10 +670,10 @@ async function sendEmailViaResend(
         throw new Error(errorMessage);
       }
       
-      const result = await response.json();
+      const result = await response.json() as { id?: string };
       logger.info('Email enviado com sucesso via Resend', { 
         id: communique.id,
-        emailId: result.id,
+        emailId: result.id || 'unknown',
         recipients: recipients.length,
         subject: subject
       });
@@ -1026,6 +1026,42 @@ async function isValidContent(html: string): Promise<boolean> {
   return true;
 }
 
+// Extrai título do HTML
+function extractTitleFromHTML(html: string, defaultTitle: string): string {
+  try {
+    // Tenta extrair do <title>
+    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    if (titleMatch && titleMatch[1]) {
+      const title = titleMatch[1].trim();
+      if (title && title.length > 10) {
+        return title;
+      }
+    }
+    
+    // Tenta extrair do <h1>
+    const h1Match = html.match(/<h1[^>]*>([^<]+)<\/h1>/i);
+    if (h1Match && h1Match[1]) {
+      const title = h1Match[1].trim();
+      if (title && title.length > 10) {
+        return title;
+      }
+    }
+    
+    // Tenta extrair de meta og:title
+    const ogTitleMatch = html.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i);
+    if (ogTitleMatch && ogTitleMatch[1]) {
+      const title = ogTitleMatch[1].trim();
+      if (title && title.length > 10) {
+        return title;
+      }
+    }
+  } catch (e) {
+    logger.warn('Erro ao extrair título do HTML', { error: String(e) });
+  }
+  
+  return defaultTitle;
+}
+
 // Verifica URL específica de comunicado
 async function checkSpecificUrl(
   url: string,
@@ -1044,47 +1080,127 @@ async function checkSpecificUrl(
     const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     const id = `specific-${hashHex.substring(0, 16)}`;
     
+    logger.info('ID gerado para URL específica', { id, url });
+    
     // Busca o HTML
+    logger.info('Buscando HTML da URL específica', { url });
     const html = await fetchFullHTML(url, 2);
+    logger.info('HTML obtido', { url, htmlLength: html.length });
     
     // Valida se o conteúdo é válido
-    if (!(await isValidContent(html))) {
-      logger.warn('URL específica retornou conteúdo inválido', { url });
+    const isValid = await isValidContent(html);
+    logger.info('Validação de conteúdo', { url, isValid, htmlLength: html.length });
+    
+    if (!isValid) {
+      logger.warn('URL específica retornou conteúdo inválido', { url, htmlLength: html.length });
       return { success: false, error: 'Conteúdo inválido (página de erro ou vazia)' };
     }
+    
+    // Extrai título do HTML
+    const defaultTitle = 'Comunicado acerca dos discernimentos de dezembro de 2025';
+    const extractedTitle = extractTitleFromHTML(html, defaultTitle);
+    logger.info('Título extraído', { url, title: extractedTitle });
     
     // Verifica se já existe no KV
     const existing = await env.COMMUNIQUE_STORE.get(id);
     if (existing) {
       const existingItem = JSON.parse(existing) as Communique;
-      logger.info('URL específica já existe no sistema', { id, url });
+      logger.info('URL específica já existe no sistema', { id, url, existingTitle: existingItem.title });
       
       // Atualiza se o conteúdo mudou
       if (html !== existingItem.html) {
         logger.info('Conteúdo da URL específica mudou, atualizando', { id, url });
-        const result = await processItem({
-          title: existingItem.title || 'Comunicado acerca dos discernimentos de dezembro de 2025',
-          link: url,
-          pubDate: existingItem.timestamp || new Date().toISOString(),
-          description: ''
-        }, env, config);
-        return { ...result, isNew: false };
+        
+        // Força processamento mesmo que já exista
+        const urlHash2 = await crypto.subtle.digest(
+          'SHA-256',
+          new TextEncoder().encode(url)
+        );
+        const hashArray2 = Array.from(new Uint8Array(urlHash2));
+        const id2 = hashArray2
+          .map(b => b.toString(16).padStart(2, '0'))
+          .join('')
+          .substring(0, 32);
+        
+        const uuid = crypto.randomUUID();
+        const communique: Communique = {
+          id: id2,
+          uuid,
+          title: extractedTitle,
+          url: url,
+          timestamp: existingItem.timestamp || new Date().toISOString(),
+          html
+        };
+        
+        // Commit no GitHub
+        logger.info('Fazendo commit no GitHub', { id: id2, title: extractedTitle });
+        const commitResult = await commitToGitHub(env, id2, uuid, extractedTitle, html, 2, communique);
+        communique.githubSha = commitResult.sha;
+        communique.githubUrl = commitResult.githubUrl;
+        communique.publicUrl = commitResult.url;
+        
+        // Salva no KV
+        await env.COMMUNIQUE_STORE.put(id2, JSON.stringify(communique));
+        logger.info('Item atualizado com sucesso', { id: id2, title: extractedTitle });
+        
+        // Envia email (não bloqueia se falhar)
+        try {
+          await sendEmail(env, communique, commitResult.url);
+        } catch (emailError) {
+          logger.error('Erro ao enviar email (não crítico)', { error: String(emailError) });
+        }
+        
+        return { success: true, isNew: false };
       }
+      logger.info('URL específica já existe e conteúdo não mudou', { id, url });
       return { success: true, isNew: false };
     }
     
     // Processa como um novo item
-    const result = await processItem({
-      title: 'Comunicado acerca dos discernimentos de dezembro de 2025',
-      link: url,
-      pubDate: new Date().toISOString(),
-      description: ''
-    }, env, config);
+    logger.info('Processando URL específica como novo item', { id, url, title: extractedTitle });
     
-    return { ...result, isNew: true };
+    const urlHash2 = await crypto.subtle.digest(
+      'SHA-256',
+      new TextEncoder().encode(url)
+    );
+    const hashArray2 = Array.from(new Uint8Array(urlHash2));
+    const id2 = hashArray2
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('')
+      .substring(0, 32);
+    
+    const uuid = crypto.randomUUID();
+    const communique: Communique = {
+      id: id2,
+      uuid,
+      title: extractedTitle,
+      url: url,
+      timestamp: new Date().toISOString(),
+      html
+    };
+    
+    // Commit no GitHub
+    logger.info('Fazendo commit no GitHub', { id: id2, title: extractedTitle });
+    const commitResult = await commitToGitHub(env, id2, uuid, extractedTitle, html, 2, communique);
+    communique.githubSha = commitResult.sha;
+    communique.githubUrl = commitResult.githubUrl;
+    communique.publicUrl = commitResult.url;
+    
+    // Salva no KV
+    await env.COMMUNIQUE_STORE.put(id2, JSON.stringify(communique));
+    logger.info('Item salvo com sucesso', { id: id2, title: extractedTitle });
+    
+    // Envia email (não bloqueia se falhar)
+    try {
+      await sendEmail(env, communique, commitResult.url);
+    } catch (emailError) {
+      logger.error('Erro ao enviar email (não crítico)', { error: String(emailError) });
+    }
+    
+    return { success: true, isNew: true };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.error('Erro ao verificar URL específica', { url, error: errorMessage });
+    logger.error('Erro ao verificar URL específica', { url, error: errorMessage, stack: error instanceof Error ? error.stack : undefined });
     return { success: false, error: errorMessage };
   }
 }
@@ -3781,7 +3897,7 @@ router.get('/admin/test-email', async (request: Request, env: Env, ctx: Executio
     };
 
     // Envia o email de teste
-    await sendEmail(env, testCommunique, testCommunique.publicUrl);
+    await sendEmail(env, testCommunique, testCommunique.publicUrl || 'https://go.tomina.ga/pages/test.html');
 
     return new Response(JSON.stringify({ 
       success: true,
