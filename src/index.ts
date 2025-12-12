@@ -1105,54 +1105,99 @@ async function checkSpecificUrl(
     
     // Verifica se já existe no KV usando o mesmo ID
     const existing = await env.COMMUNIQUE_STORE.get(id);
+    let existingItem: Communique | null = null;
+    
     if (existing) {
-      const existingItem = JSON.parse(existing) as Communique;
-      logger.info('URL específica já existe no sistema', { id, url, existingTitle: existingItem.title, hasPublicUrl: !!existingItem.publicUrl });
-      
-      // Se já tem publicUrl, não precisa processar novamente (a menos que o conteúdo mudou)
-      if (existingItem.publicUrl && html === existingItem.html) {
-        logger.info('URL específica já processada e conteúdo não mudou', { id, url, publicUrl: existingItem.publicUrl });
-        return { success: true, isNew: false };
+      try {
+        existingItem = JSON.parse(existing) as Communique;
+        logger.info('URL específica já existe no sistema', { 
+          id, 
+          url, 
+          existingTitle: existingItem.title, 
+          hasPublicUrl: !!existingItem.publicUrl,
+          hasGithubUrl: !!existingItem.githubUrl,
+          htmlLength: existingItem.html?.length || 0
+        });
+        
+        // Se já tem publicUrl E o conteúdo é o mesmo, não precisa processar novamente
+        if (existingItem.publicUrl && html === existingItem.html) {
+          logger.info('URL específica já processada e conteúdo não mudou', { 
+            id, 
+            url, 
+            publicUrl: existingItem.publicUrl 
+          });
+          return { success: true, isNew: false };
+        }
+        
+        // Processa se não tem publicUrl OU se o conteúdo mudou
+        const reason = !existingItem.publicUrl 
+          ? 'sem publicUrl - precisa processar' 
+          : 'conteúdo mudou - precisa atualizar';
+        logger.info('Processando URL específica', { id, url, reason });
+      } catch (e) {
+        logger.warn('Erro ao parsear item existente, processando como novo', { id, error: String(e) });
+        existingItem = null;
       }
-      
-      // Atualiza se o conteúdo mudou ou se não tem publicUrl ainda
-      logger.info('Processando URL específica (atualização ou primeira vez)', { id, url, reason: existingItem.publicUrl ? 'conteúdo mudou' : 'sem publicUrl' });
     } else {
       logger.info('Processando URL específica como novo item', { id, url, title: extractedTitle });
     }
     
     // Processa o item (novo ou atualização)
-    const uuid = existing ? (JSON.parse(existing) as Communique).uuid : crypto.randomUUID();
+    const uuid = existingItem?.uuid || crypto.randomUUID();
     const communique: Communique = {
       id,
       uuid,
       title: extractedTitle,
       url: url,
-      timestamp: existing ? (JSON.parse(existing) as Communique).timestamp : new Date().toISOString(),
+      timestamp: existingItem?.timestamp || new Date().toISOString(),
       html
     };
     
     // Commit no GitHub
-    logger.info('Fazendo commit no GitHub', { id, title: extractedTitle, uuid });
-    const commitResult = await commitToGitHub(env, id, uuid, extractedTitle, html, 2, communique);
-    communique.githubSha = commitResult.sha;
-    communique.githubUrl = commitResult.githubUrl;
-    communique.publicUrl = commitResult.url;
+    logger.info('Fazendo commit no GitHub', { id, title: extractedTitle, uuid, isNew: !existingItem });
+    try {
+      const commitResult = await commitToGitHub(env, id, uuid, extractedTitle, html, 2, communique);
+      communique.githubSha = commitResult.sha;
+      communique.githubUrl = commitResult.githubUrl;
+      communique.publicUrl = commitResult.url;
+      
+      logger.info('Commit realizado com sucesso', { 
+        id, 
+        sha: commitResult.sha?.substring(0, 7), 
+        publicUrl: commitResult.url 
+      });
+    } catch (commitError) {
+      logger.error('Erro ao fazer commit no GitHub', { 
+        id, 
+        error: String(commitError),
+        url 
+      });
+      throw commitError;
+    }
     
     // Salva no KV
     await env.COMMUNIQUE_STORE.put(id, JSON.stringify(communique));
-    logger.info('Item salvo com sucesso', { id, title: extractedTitle, publicUrl: communique.publicUrl });
+    logger.info('Item salvo no KV com sucesso', { 
+      id, 
+      title: extractedTitle, 
+      publicUrl: communique.publicUrl,
+      githubUrl: communique.githubUrl 
+    });
     
     // Envia email apenas se for novo (não bloqueia se falhar)
-    if (!existing) {
+    if (!existingItem) {
       try {
-        await sendEmail(env, communique, commitResult.url);
+        logger.info('Enviando email de notificação', { id, title: extractedTitle });
+        await sendEmail(env, communique, communique.publicUrl!);
+        logger.info('Email enviado com sucesso', { id });
       } catch (emailError) {
         logger.error('Erro ao enviar email (não crítico)', { error: String(emailError) });
       }
+    } else {
+      logger.info('Email não enviado (item já existia)', { id });
     }
     
-    return { success: true, isNew: !existing };
+    return { success: true, isNew: !existingItem };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     logger.error('Erro ao verificar URL específica', { url, error: errorMessage, stack: error instanceof Error ? error.stack : undefined });
@@ -3908,29 +3953,49 @@ router.get('/admin/test-url', async (request: Request, env: Env, ctx: ExecutionC
   if (authCheck) return authCheck;
 
   try {
-    const url = new URL(request.url).searchParams.get('url');
-    if (!url) {
+    const urlParam = new URL(request.url).searchParams.get('url');
+    const force = new URL(request.url).searchParams.get('force') === 'true';
+    
+    if (!urlParam) {
       return new Response(JSON.stringify({ 
         success: false,
-        error: 'Parâmetro "url" é obrigatório. Use: /admin/test-url?url=https://...'
+        error: 'Parâmetro "url" é obrigatório. Use: /admin/test-url?url=https://...&force=true (opcional)'
       }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
       });
     }
 
-    logger.info('Testando processamento de URL específica', { url });
+    logger.info('Testando processamento de URL específica', { url: urlParam, force });
     const config = loadConfig(env);
-    const result = await checkSpecificUrl(url, env, config);
+    
+    // Se force=true, remove do KV antes de processar
+    if (force) {
+      const urlHash = await crypto.subtle.digest(
+        'SHA-256',
+        new TextEncoder().encode(urlParam)
+      );
+      const hashArray = Array.from(new Uint8Array(urlHash));
+      const id = hashArray
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('')
+        .substring(0, 32);
+      
+      await env.COMMUNIQUE_STORE.delete(id);
+      logger.info('Item removido do KV para forçar reprocessamento', { id, url: urlParam });
+    }
+    
+    const result = await checkSpecificUrl(urlParam, env, config);
 
     return new Response(JSON.stringify({ 
       success: result.success,
       isNew: result.isNew,
       error: result.error,
       message: result.success 
-        ? (result.isNew ? 'URL processada com sucesso (novo item)' : 'URL já existia, atualizada se necessário')
+        ? (result.isNew ? 'URL processada com sucesso (novo item)' : 'URL processada/atualizada')
         : `Erro ao processar URL: ${result.error}`,
-      url: url
+      url: urlParam,
+      forced: force
     }), {
       headers: { 'Content-Type': 'application/json' }
     });
@@ -3941,6 +4006,70 @@ router.get('/admin/test-url', async (request: Request, env: Env, ctx: ExecutionC
     return new Response(JSON.stringify({ 
       success: false,
       error: errorMessage
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+});
+
+// Rota para forçar processamento de todas as URLs específicas
+router.get('/admin/process-specific-urls', async (request: Request, env: Env, ctx: ExecutionContext) => {
+  const authCheck = await requireAdmin(env, request);
+  if (authCheck) return authCheck;
+
+  try {
+    const specificUrls = [
+      'https://portal.shalom.tec.br/comunicado-acerca-dos-discernimentos-de-dezembro-de-2025',
+      'https://portal.shalom.tec.br/2025-dezembro-discernimentos'
+    ];
+    
+    const config = loadConfig(env);
+    const results = [];
+    
+    for (const url of specificUrls) {
+      try {
+        // Remove do KV para forçar reprocessamento
+        const urlHash = await crypto.subtle.digest(
+          'SHA-256',
+          new TextEncoder().encode(url)
+        );
+        const hashArray = Array.from(new Uint8Array(urlHash));
+        const id = hashArray
+          .map(b => b.toString(16).padStart(2, '0'))
+          .join('')
+          .substring(0, 32);
+        
+        await env.COMMUNIQUE_STORE.delete(id);
+        logger.info('Item removido para forçar reprocessamento', { id, url });
+        
+        const result = await checkSpecificUrl(url, env, config);
+        results.push({
+          url,
+          success: result.success,
+          isNew: result.isNew,
+          error: result.error
+        });
+      } catch (error) {
+        results.push({
+          url,
+          success: false,
+          error: String(error)
+        });
+      }
+    }
+    
+    return new Response(JSON.stringify({ 
+      success: true,
+      message: 'Processamento de URLs específicas concluído',
+      results
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({ 
+      success: false,
+      error: String(error)
     }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
