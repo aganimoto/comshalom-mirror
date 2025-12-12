@@ -85,6 +85,47 @@ else
 fi
 
 echo ""
+
+# Perguntar sobre provedor de email
+echo "📧 Escolha o provedor de email:"
+echo "   1) Resend (recomendado - fácil, sem SPF)"
+echo "   2) Mailchannels (requer SPF no DNS)"
+read -p "   Escolha (1 ou 2, padrão: 1): " provider_choice
+
+if [ -z "$provider_choice" ] || [ "$provider_choice" = "1" ]; then
+    provider="resend"
+    echo ""
+    echo "📝 Configurando Resend..."
+    echo "   Você precisa de uma API Key do Resend (grátis: 3.000 emails/mês)"
+    echo "   Obtenha em: https://resend.com/api-keys"
+    read -p "   Digite sua RESEND_API_KEY (ou Enter para pular): " resend_key
+    
+    if [ -n "$resend_key" ]; then
+        echo "   Configurando: RESEND_API_KEY = ${resend_key:0:10}..."
+        $WRANGLER_CMD secret put RESEND_API_KEY <<< "$resend_key"
+        
+        if [ $? -eq 0 ]; then
+            echo "   ✅ RESEND_API_KEY configurado com sucesso!"
+        else
+            echo "   ❌ Erro ao configurar RESEND_API_KEY"
+        fi
+    else
+        echo "   ⏭️  RESEND_API_KEY pulado (configure depois)"
+    fi
+else
+    provider="mailchannels"
+fi
+
+echo "   Configurando: EMAIL_PROVIDER = $provider"
+$WRANGLER_CMD secret put EMAIL_PROVIDER <<< "$provider"
+
+if [ $? -eq 0 ]; then
+    echo "   ✅ EMAIL_PROVIDER configurado!"
+else
+    echo "   ⚠️  Erro ao configurar EMAIL_PROVIDER"
+fi
+
+echo ""
 echo "=============================================="
 echo "✅ Configuração concluída!"
 echo ""
@@ -93,6 +134,10 @@ echo "   EMAIL_FROM = $email_from"
 echo "   EMAIL_TO = $email_to"
 if [ -n "$email_reply_to" ]; then
     echo "   EMAIL_REPLY_TO = $email_reply_to"
+fi
+echo "   EMAIL_PROVIDER = $provider"
+if [ "$provider" = "resend" ] && [ -n "$resend_key" ]; then
+    echo "   RESEND_API_KEY = ${resend_key:0:10}... (configurado)"
 fi
 echo ""
 echo "🧪 Próximo passo: Teste o email no painel admin:"

@@ -605,7 +605,184 @@ ${communique.githubUrl && communique.githubUrl !== githubUrl ? `- GitHub: ${comm
 Este é um email automático do sistema de monitoramento RSS do ComShalom.`;
 }
 
-// Envia email via Mailchannels com retry, validação e melhorias
+// Envia email via Resend API
+async function sendEmailViaResend(
+  env: Env,
+  communique: Communique,
+  githubUrl: string,
+  recipients: string[],
+  subject: string,
+  htmlContent: string,
+  textContent: string,
+  retries = 2
+): Promise<void> {
+  if (!env.RESEND_API_KEY) {
+    throw new Error('RESEND_API_KEY não configurado');
+  }
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const emailContent: any = {
+        from: env.EMAIL_FROM,
+        to: recipients,
+        subject: subject,
+        html: htmlContent,
+        text: textContent,
+        headers: {
+          'X-ComShalom-Id': communique.id,
+          'X-ComShalom-Type': 'new-communique',
+          'List-Unsubscribe': `<${githubUrl}>`,
+          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+        }
+      };
+
+      // Adiciona reply-to se configurado
+      if (env.EMAIL_REPLY_TO && isValidEmail(env.EMAIL_REPLY_TO)) {
+        emailContent.reply_to = env.EMAIL_REPLY_TO;
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      
+      const response = await fetch('https://api.resend.com/emails', {
+        signal: controller.signal,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${env.RESEND_API_KEY}`
+        },
+        body: JSON.stringify(emailContent)
+      });
+      
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        let errorMessage = `Resend error: ${response.status}`;
+        
+        try {
+          const errorJson = JSON.parse(errorText);
+          errorMessage = `Resend error: ${errorJson.message || errorText}`;
+        } catch {
+          errorMessage = `Resend error: ${response.status} - ${errorText.substring(0, 200)}`;
+        }
+        
+        throw new Error(errorMessage);
+      }
+      
+      const result = await response.json();
+      logger.info('Email enviado com sucesso via Resend', { 
+        id: communique.id,
+        emailId: result.id,
+        recipients: recipients.length,
+        subject: subject
+      });
+      
+      return;
+    } catch (error) {
+      if (attempt === retries) {
+        throw error;
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+    }
+  }
+}
+
+// Envia email via Mailchannels API
+async function sendEmailViaMailchannels(
+  env: Env,
+  communique: Communique,
+  githubUrl: string,
+  recipients: string[],
+  subject: string,
+  htmlContent: string,
+  textContent: string,
+  retries = 2
+): Promise<void> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const emailContent: any = {
+        personalizations: [{
+          to: recipients.map(email => ({ email }))
+        }],
+        from: {
+          email: env.EMAIL_FROM,
+          name: 'ComShalom RSS Monitor'
+        },
+        subject: subject,
+        content: [
+          {
+            type: 'text/plain',
+            value: textContent
+          },
+          {
+            type: 'text/html',
+            value: htmlContent
+          }
+        ],
+        headers: {
+          'X-ComShalom-Id': communique.id,
+          'X-ComShalom-Type': 'new-communique',
+          'List-Unsubscribe': `<${githubUrl}>`,
+          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
+        }
+      };
+
+      if (env.EMAIL_REPLY_TO && isValidEmail(env.EMAIL_REPLY_TO)) {
+        emailContent.reply_to = {
+          email: env.EMAIL_REPLY_TO
+        };
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      
+      const response = await fetch('https://api.mailchannels.net/tx/v1/send', {
+        signal: controller.signal,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(emailContent)
+      });
+      
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        let errorMessage = `Mailchannels error: ${response.status}`;
+        
+        if (response.status === 401) {
+          const emailFromDomain = env.EMAIL_FROM ? env.EMAIL_FROM.split('@')[1] : 'não configurado';
+          errorMessage = `Erro de autenticação (401): O Mailchannels requer configuração DNS (SPF). EMAIL_FROM atual: ${env.EMAIL_FROM || 'não configurado'}. Verifique se o domínio "${emailFromDomain}" tem SPF configurado (v=spf1 include:relay.mailchannels.net ~all) no DNS. Detalhes: ${errorText.substring(0, 200)}`;
+        } else if (response.status === 403) {
+          errorMessage = `Erro de permissão (403): O domínio não está autorizado. Verifique a configuração SPF/DKIM. Detalhes: ${errorText.substring(0, 200)}`;
+        } else if (response.status === 400) {
+          errorMessage = `Erro de validação (400): Verifique os dados do email. Detalhes: ${errorText.substring(0, 200)}`;
+        } else {
+          errorMessage = `Mailchannels error: ${response.status} - ${errorText.substring(0, 200)}`;
+        }
+        
+        throw new Error(errorMessage);
+      }
+      
+      logger.info('Email enviado com sucesso via Mailchannels', { 
+        id: communique.id,
+        recipients: recipients.length,
+        subject: subject
+      });
+      
+      return;
+    } catch (error) {
+      if (attempt === retries) {
+        throw error;
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+    }
+  }
+}
+
+// Envia email com suporte a múltiplos provedores
 async function sendEmail(
   env: Env,
   communique: Communique,
@@ -648,109 +825,45 @@ async function sendEmail(
   // Trunca assunto para evitar problemas
   const subject = `Novo Comunicado: ${truncateText(communique.title, 50)}`;
 
+  // Determina qual provedor usar
+  const provider = (env.EMAIL_PROVIDER || 'mailchannels').toLowerCase();
+  
   // Log do domínio usado para debug
   const emailFromDomain = env.EMAIL_FROM.split('@')[1];
   logger.info('Preparando envio de email', {
     emailFrom: env.EMAIL_FROM,
     emailFromDomain: emailFromDomain,
     recipients: recipients.length,
-    subject: subject
+    subject: subject,
+    provider: provider
   });
 
   // Gera conteúdo HTML e texto
   const htmlContent = generateEmailHTML(communique, githubUrl);
   const textContent = generateEmailText(communique, githubUrl);
 
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const emailContent: any = {
-        personalizations: [{
-          to: recipients.map(email => ({ email }))
-        }],
-        from: {
-          email: env.EMAIL_FROM,
-          name: 'ComShalom RSS Monitor'
-        },
-        subject: subject,
-        content: [
-          {
-            type: 'text/plain',
-            value: textContent
-          },
-          {
-          type: 'text/html',
-            value: htmlContent
-          }
-        ],
-        headers: {
-          'X-ComShalom-Id': communique.id,
-          'X-ComShalom-Type': 'new-communique',
-          'List-Unsubscribe': `<${githubUrl}>`,
-          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'
-        }
-      };
-
-      // Adiciona reply-to se configurado
-      if (env.EMAIL_REPLY_TO && isValidEmail(env.EMAIL_REPLY_TO)) {
-        emailContent.reply_to = {
-          email: env.EMAIL_REPLY_TO
-        };
-      }
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
-      
-      const response = await fetch('https://api.mailchannels.net/tx/v1/send', {
-        signal: controller.signal,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(emailContent)
-      });
-      
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        let errorMessage = `Mailchannels error: ${response.status}`;
-        
-        // Mensagens de erro mais amigáveis
-        if (response.status === 401) {
-          const emailFromDomain = env.EMAIL_FROM ? env.EMAIL_FROM.split('@')[1] : 'não configurado';
-          errorMessage = `Erro de autenticação (401): O Mailchannels requer configuração DNS (SPF). EMAIL_FROM atual: ${env.EMAIL_FROM || 'não configurado'}. Verifique se o domínio "${emailFromDomain}" tem SPF configurado (v=spf1 include:relay.mailchannels.net ~all) no DNS. Detalhes: ${errorText.substring(0, 200)}`;
-        } else if (response.status === 403) {
-          errorMessage = `Erro de permissão (403): O domínio não está autorizado. Verifique a configuração SPF/DKIM. Detalhes: ${errorText.substring(0, 200)}`;
-        } else if (response.status === 400) {
-          errorMessage = `Erro de validação (400): Verifique os dados do email. Detalhes: ${errorText.substring(0, 200)}`;
-        } else {
-          errorMessage = `Mailchannels error: ${response.status} - ${errorText.substring(0, 200)}`;
-        }
-        
-        throw new Error(errorMessage);
-      }
-      
-      // Log de sucesso
-      logger.info('Email enviado com sucesso', { 
-        id: communique.id, 
-        title: communique.title,
-        recipients: recipients.length,
-        subject: subject
-      });
-      
-      return; // Sucesso
-    } catch (error) {
-      if (attempt === retries) {
-        logger.error('Erro ao enviar email após retries', { 
-          error: String(error),
-          id: communique.id,
-          title: communique.title
-        });
-        throw error;
-      }
-      // Espera antes de tentar novamente (backoff exponencial)
-      await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+  try {
+    if (provider === 'resend') {
+      await sendEmailViaResend(env, communique, githubUrl, recipients, subject, htmlContent, textContent, retries);
+    } else {
+      await sendEmailViaMailchannels(env, communique, githubUrl, recipients, subject, htmlContent, textContent, retries);
     }
+    
+    logger.info('Email enviado com sucesso', { 
+      id: communique.id, 
+      title: communique.title,
+      recipients: recipients.length,
+      subject: subject,
+      provider: provider
+    });
+  } catch (error) {
+    logger.error('Erro ao enviar email', { 
+      error: String(error),
+      id: communique.id,
+      title: communique.title,
+      provider: provider
+    });
+    throw error;
   }
 }
 
