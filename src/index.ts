@@ -60,7 +60,7 @@ function isValidEmail(email: string): boolean {
   return emailRegex.test(email.trim());
 }
 
-// Gera slug a partir do título
+// Gera slug a partir do título (usado apenas para referência, não no nome do arquivo)
 function generateSlug(title: string): string {
   return title
     .toLowerCase()
@@ -69,6 +69,129 @@ function generateSlug(title: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .substring(0, 50);
+}
+
+// Gera HTML completo com wrapper para a página
+function generateFullPageHTML(communique: Communique): string {
+  const safeTitle = escapeHtml(communique.title);
+  const safeUrl = escapeHtml(communique.url || '');
+  
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${safeTitle}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f5f5f7;
+            color: #1d1d1f;
+            line-height: 1.6;
+        }
+        
+        .header {
+            background: white;
+            border-bottom: 1px solid #e5e5e7;
+            padding: 20px 0;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+        
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        .header h1 {
+            font-size: 1.5em;
+            font-weight: 600;
+            color: #1d1d1f;
+            margin-bottom: 8px;
+        }
+        
+        .header-meta {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            font-size: 0.9em;
+            color: #86868b;
+        }
+        
+        .header-meta a {
+            color: #0071e3;
+            text-decoration: none;
+        }
+        
+        .header-meta a:hover {
+            text-decoration: underline;
+        }
+        
+        .content-wrapper {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        
+        .content {
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            border: 1px solid #e5e5e7;
+        }
+        
+        .content img {
+            max-width: 100%;
+            height: auto;
+        }
+        
+        .content a {
+            color: #0071e3;
+            text-decoration: none;
+        }
+        
+        .content a:hover {
+            text-decoration: underline;
+        }
+        
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.2em;
+            }
+            
+            .content {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <h1>${safeTitle}</h1>
+            <div class="header-meta">
+                <span>📅 ${new Date(communique.timestamp).toLocaleString('pt-BR')}</span>
+                ${safeUrl ? `<a href="${safeUrl}" target="_blank">🌐 Fonte Original</a>` : ''}
+            </div>
+        </div>
+    </div>
+    <div class="content-wrapper">
+        <div class="content">
+            ${communique.html}
+        </div>
+    </div>
+</body>
+</html>`;
 }
 
 // Cache para branch default do GitHub
@@ -173,10 +296,11 @@ async function commitToGitHub(
   uuid: string,
   title: string,
   html: string,
-  retries = 2
+  retries = 2,
+  communique?: Communique
 ): Promise<{ sha?: string; url: string; githubUrl: string }> {
-  const slug = generateSlug(title);
-  const filename = `pages/${uuid}-${slug}.html`;
+  // Usa apenas UUID para nome do arquivo (mais curto)
+  const filename = `pages/${uuid}.html`;
   const path = filename;
 
   // Detecta branch padrão
@@ -213,8 +337,14 @@ async function commitToGitHub(
         // Arquivo não existe, continuar
       }
 
+      // Se tiver o objeto communique completo, gera HTML com wrapper
+      let finalHtml = html;
+      if (communique) {
+        finalHtml = generateFullPageHTML(communique);
+      }
+
       // Converte HTML para base64
-      const content = btoa(unescape(encodeURIComponent(html)));
+      const content = btoa(unescape(encodeURIComponent(finalHtml)));
 
       // Cria ou atualiza o arquivo
       const controller = new AbortController();
@@ -476,8 +606,8 @@ async function processItem(
     // Salva no KV
     await env.COMMUNIQUE_STORE.put(id, JSON.stringify(communique));
 
-    // Commit no GitHub
-    const githubResult = await commitToGitHub(env, id, uuid, item.title, html);
+    // Commit no GitHub (passa o communique para gerar HTML completo)
+    const githubResult = await commitToGitHub(env, id, uuid, item.title, html, 2, communique);
     communique.githubSha = githubResult.sha;
     communique.githubUrl = githubResult.githubUrl;
     communique.publicUrl = githubResult.url;
@@ -1541,6 +1671,128 @@ router.get('/api/push/check', async (request: Request, env: Env, ctx: ExecutionC
   }
 });
 
+// Verifica se uma página existe no GitHub
+async function checkPageExists(env: Env, uuid: string): Promise<boolean> {
+  try {
+    const defaultBranch = await getDefaultBranch(env);
+    const path = `pages/${uuid}.html`;
+    const apiUrl = `https://api.github.com/repos/${env.GITHUB_REPO_OWNER}/${env.GITHUB_REPO_NAME}/contents/${path}`;
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    
+    const response = await fetch(apiUrl, {
+      signal: controller.signal,
+      headers: {
+        'Authorization': env.GITHUB_TOKEN.startsWith('github_pat_')
+          ? `Bearer ${env.GITHUB_TOKEN}` 
+          : `token ${env.GITHUB_TOKEN}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'Cloudflare-Worker'
+      }
+    });
+    
+    clearTimeout(timeoutId);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+// Rota admin: recriar todas as páginas do zero
+router.get('/admin/recreate-all', async (request: Request, env: Env, ctx: ExecutionContext) => {
+  const authCheck = requireAdmin(env)(request);
+  if (authCheck) return authCheck;
+
+  try {
+    const keys = await env.COMMUNIQUE_STORE.list();
+    const items: Communique[] = [];
+    
+    // Busca todos os valores em paralelo
+    const values = await Promise.all(
+      keys.keys.map(key => env.COMMUNIQUE_STORE.get(key.name))
+    );
+    
+    for (const value of values) {
+      if (value) {
+        try {
+          const item = JSON.parse(value) as Communique;
+          // Processa todos os itens que têm HTML
+          if (item.html && item.html.length > 0) {
+            // Garante que tem UUID
+            if (!item.uuid) {
+              item.uuid = crypto.randomUUID();
+            }
+            items.push(item);
+          }
+        } catch (e) {
+          logger.warn('Erro ao parsear item', { error: String(e) });
+        }
+      }
+    }
+
+    if (items.length === 0) {
+      return createOptimizedResponse(JSON.stringify({
+        message: 'Nenhum item encontrado para recriar',
+        count: 0
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    logger.info('Iniciando recriação de todas as páginas', { count: items.length });
+
+    // Processa em background
+    ctx.waitUntil(
+      (async () => {
+        const results = await Promise.allSettled(
+          items.map(async (item) => {
+            try {
+              logger.info('Recriando página', { id: item.id, uuid: item.uuid, title: item.title });
+              
+              // Faz commit no GitHub (sempre recria, mesmo se já existir)
+              const githubResult = await commitToGitHub(env, item.id, item.uuid, item.title, item.html, 2, item);
+              
+              // Atualiza o item com informações do GitHub
+              item.githubSha = githubResult.sha;
+              item.githubUrl = githubResult.githubUrl;
+              item.publicUrl = githubResult.url;
+              
+              // Atualiza no KV
+              await env.COMMUNIQUE_STORE.put(item.id, JSON.stringify(item));
+              
+              logger.info('Página recriada com sucesso', { id: item.id, publicUrl: item.publicUrl });
+              return { success: true, id: item.id, publicUrl: item.publicUrl };
+            } catch (error) {
+              const errorMsg = error instanceof Error ? error.message : String(error);
+              logger.error('Erro ao recriar página', { id: item.id, error: errorMsg });
+              return { success: false, id: item.id, error: errorMsg };
+            }
+          })
+        );
+
+        const successful = results.filter(r => r.status === 'fulfilled' && r.value && r.value.success).length;
+        const failed = results.length - successful;
+        logger.info('Recriação concluída', { successful, failed, total: results.length });
+      })()
+    );
+
+    return createOptimizedResponse(JSON.stringify({
+      message: 'Recriação de páginas iniciada em background',
+      count: items.length,
+      status: 'processing'
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    logger.error('Erro ao iniciar recriação', { error: String(error) });
+    return createOptimizedResponse(JSON.stringify({ error: String(error) }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+});
+
 // Rota admin: reprocessar itens sem cópia no GitHub
 router.get('/admin/reprocess', async (request: Request, env: Env, ctx: ExecutionContext) => {
   const authCheck = requireAdmin(env)(request);
@@ -1598,8 +1850,8 @@ router.get('/admin/reprocess', async (request: Request, env: Env, ctx: Execution
             return { success: false, id: item.id, error: 'No HTML content' };
           }
 
-          // Faz commit no GitHub usando o HTML já salvo
-          const githubResult = await commitToGitHub(env, item.id, item.uuid, item.title, item.html);
+          // Faz commit no GitHub usando o HTML já salvo (passa o item completo para gerar HTML com wrapper)
+          const githubResult = await commitToGitHub(env, item.id, item.uuid, item.title, item.html, 2, item);
           
           // Atualiza o item com informações do GitHub
           item.githubSha = githubResult.sha;
