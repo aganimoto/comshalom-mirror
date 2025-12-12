@@ -178,6 +178,8 @@ wrangler secret put RATE_LIMIT_ENABLED
 | `BATCH_SIZE` | Não | Tamanho do batch para processamento (padrão: 5) |
 | `MAX_CONCURRENCY` | Não | Máximo de itens processados em paralelo (padrão: 3) |
 | `RATE_LIMIT_ENABLED` | Não | Habilitar rate limiting (padrão: true) |
+| `VAPID_PUBLIC_KEY` | Não | Chave pública VAPID para Web Push |
+| `VAPID_PRIVATE_KEY` | Não | Chave privada VAPID para Web Push |
 
 ### Token GitHub
 
@@ -635,6 +637,97 @@ Acessar `/admin/stats` para estatísticas do sistema:
 
 - Headers CORS configurados para origens permitidas
 - Suporte a múltiplos domínios (localhost, produção)
+
+## Fragilidades e Pontos Fracos Conhecidos
+
+### Limitações Técnicas
+
+1. **Rate Limiting em Memória**
+   - O rate limiting atual é baseado em memória e não persiste entre instâncias do Worker
+   - Em alta carga, pode haver inconsistências
+   - **Solução futura**: Implementar rate limiting usando KV Storage
+
+2. **Cache de Branch do GitHub**
+   - Cache em memória pode ficar desatualizado se a branch padrão mudar
+   - TTL de 1 hora pode ser insuficiente em alguns casos
+   - **Mitigação**: Fallback para 'main' se a detecção falhar
+
+3. **Processamento Paralelo Limitado**
+   - Limite de concorrência configurável mas limitado a 10 itens simultâneos
+   - Em feeds muito grandes, pode demorar para processar tudo
+   - **Mitigação**: Processamento em batches com controle de concorrência
+
+4. **Validação de HTML**
+   - Sanitização básica pode não cobrir todos os casos de XSS
+   - HTML muito grande (>10MB) é rejeitado mas pode causar falhas silenciosas
+   - **Recomendação**: Revisar e melhorar a lista de tags/atributos permitidos
+
+5. **Dependência de Serviços Externos**
+   - Falhas no RSS feed, GitHub API ou Mailchannels podem interromper o processamento
+   - Retry implementado mas pode não ser suficiente em casos extremos
+   - **Mitigação**: Logs detalhados e monitoramento
+
+### Segurança
+
+1. **Admin Key em Frontend**
+   - A chave de administração está exposta no código do frontend
+   - Qualquer pessoa pode acessar as rotas administrativas
+   - **Recomendação**: Implementar autenticação mais robusta ou restringir acesso por IP
+
+2. **Tokens em Secrets**
+   - Tokens do GitHub armazenados como secrets (correto)
+   - Mas se comprometidos, podem dar acesso total ao repositório
+   - **Recomendação**: Usar tokens com escopo mínimo necessário
+
+3. **CORS Permissivo**
+   - CORS configurado para múltiplas origens pode ser explorado
+   - **Mitigação**: Restringir origens permitidas em produção
+
+### Performance
+
+1. **KV Storage Limits**
+   - KV tem limite de 25MB por valor
+   - HTML muito grande pode exceder o limite
+   - **Mitigação**: Validação de tamanho antes de salvar (10MB)
+
+2. **Timeout de Requisições**
+   - Timeouts configurados mas podem não ser suficientes em conexões lentas
+   - **Mitigação**: Retry com backoff exponencial
+
+3. **Processamento Síncrono em Alguns Casos**
+   - Reprocessamento executa sincronamente, pode demorar
+   - **Mitigação**: Usar `ctx.waitUntil` para processamento em background quando possível
+
+### Confiabilidade
+
+1. **Falta de Monitoramento Avançado**
+   - Apenas logs básicos, sem alertas automáticos
+   - **Recomendação**: Integrar com serviços de monitoramento (ex: Sentry, Datadog)
+
+2. **Sem Backup Automático**
+   - Dados apenas no KV e GitHub
+   - Se ambos falharem, dados podem ser perdidos
+   - **Recomendação**: Implementar backup periódico
+
+3. **Dependência de Cron**
+   - Se o Cron falhar, não há notificação
+   - **Mitigação**: Health check endpoint e monitoramento externo
+
+### Manutenibilidade
+
+1. **Código Monolítico**
+   - Grande parte da lógica em `src/index.ts`
+   - Pode ser difícil manter e testar
+   - **Recomendação**: Modularizar mais o código
+
+2. **Falta de Testes**
+   - Sem testes automatizados
+   - Mudanças podem quebrar funcionalidades existentes
+   - **Recomendação**: Implementar testes unitários e de integração
+
+3. **Documentação de Código**
+   - Algumas funções complexas sem documentação adequada
+   - **Recomendação**: Adicionar JSDoc em funções críticas
 
 ## Fragilidades e Limitações Conhecidas
 
