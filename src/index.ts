@@ -678,7 +678,7 @@ async function sendEmailViaResend(
         subject: subject
       });
       
-      return;
+    return;
     } catch (error) {
       if (attempt === retries) {
         throw error;
@@ -716,7 +716,7 @@ async function sendEmailViaMailchannels(
             value: textContent
           },
           {
-            type: 'text/html',
+          type: 'text/html',
             value: htmlContent
           }
         ],
@@ -1071,14 +1071,16 @@ async function checkSpecificUrl(
   try {
     logger.info('Verificando URL específica', { url });
     
-    // Gera ID único baseado na URL
+    // Gera ID único baseado na URL (mesmo formato usado em processItem)
     const urlHash = await crypto.subtle.digest(
       'SHA-256',
       new TextEncoder().encode(url)
     );
     const hashArray = Array.from(new Uint8Array(urlHash));
-    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    const id = `specific-${hashHex.substring(0, 16)}`;
+    const id = hashArray
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('')
+      .substring(0, 32);
     
     logger.info('ID gerado para URL específica', { id, url });
     
@@ -1101,103 +1103,56 @@ async function checkSpecificUrl(
     const extractedTitle = extractTitleFromHTML(html, defaultTitle);
     logger.info('Título extraído', { url, title: extractedTitle });
     
-    // Verifica se já existe no KV
+    // Verifica se já existe no KV usando o mesmo ID
     const existing = await env.COMMUNIQUE_STORE.get(id);
     if (existing) {
       const existingItem = JSON.parse(existing) as Communique;
-      logger.info('URL específica já existe no sistema', { id, url, existingTitle: existingItem.title });
+      logger.info('URL específica já existe no sistema', { id, url, existingTitle: existingItem.title, hasPublicUrl: !!existingItem.publicUrl });
       
-      // Atualiza se o conteúdo mudou
-      if (html !== existingItem.html) {
-        logger.info('Conteúdo da URL específica mudou, atualizando', { id, url });
-        
-        // Força processamento mesmo que já exista
-        const urlHash2 = await crypto.subtle.digest(
-          'SHA-256',
-          new TextEncoder().encode(url)
-        );
-        const hashArray2 = Array.from(new Uint8Array(urlHash2));
-        const id2 = hashArray2
-          .map(b => b.toString(16).padStart(2, '0'))
-          .join('')
-          .substring(0, 32);
-        
-        const uuid = crypto.randomUUID();
-        const communique: Communique = {
-          id: id2,
-          uuid,
-          title: extractedTitle,
-          url: url,
-          timestamp: existingItem.timestamp || new Date().toISOString(),
-          html
-        };
-        
-        // Commit no GitHub
-        logger.info('Fazendo commit no GitHub', { id: id2, title: extractedTitle });
-        const commitResult = await commitToGitHub(env, id2, uuid, extractedTitle, html, 2, communique);
-        communique.githubSha = commitResult.sha;
-        communique.githubUrl = commitResult.githubUrl;
-        communique.publicUrl = commitResult.url;
-        
-        // Salva no KV
-        await env.COMMUNIQUE_STORE.put(id2, JSON.stringify(communique));
-        logger.info('Item atualizado com sucesso', { id: id2, title: extractedTitle });
-        
-        // Envia email (não bloqueia se falhar)
-        try {
-          await sendEmail(env, communique, commitResult.url);
-        } catch (emailError) {
-          logger.error('Erro ao enviar email (não crítico)', { error: String(emailError) });
-        }
-        
+      // Se já tem publicUrl, não precisa processar novamente (a menos que o conteúdo mudou)
+      if (existingItem.publicUrl && html === existingItem.html) {
+        logger.info('URL específica já processada e conteúdo não mudou', { id, url, publicUrl: existingItem.publicUrl });
         return { success: true, isNew: false };
       }
-      logger.info('URL específica já existe e conteúdo não mudou', { id, url });
-      return { success: true, isNew: false };
+      
+      // Atualiza se o conteúdo mudou ou se não tem publicUrl ainda
+      logger.info('Processando URL específica (atualização ou primeira vez)', { id, url, reason: existingItem.publicUrl ? 'conteúdo mudou' : 'sem publicUrl' });
+    } else {
+      logger.info('Processando URL específica como novo item', { id, url, title: extractedTitle });
     }
     
-    // Processa como um novo item
-    logger.info('Processando URL específica como novo item', { id, url, title: extractedTitle });
-    
-    const urlHash2 = await crypto.subtle.digest(
-      'SHA-256',
-      new TextEncoder().encode(url)
-    );
-    const hashArray2 = Array.from(new Uint8Array(urlHash2));
-    const id2 = hashArray2
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('')
-      .substring(0, 32);
-    
-    const uuid = crypto.randomUUID();
+    // Processa o item (novo ou atualização)
+    const uuid = existing ? (JSON.parse(existing) as Communique).uuid : crypto.randomUUID();
     const communique: Communique = {
-      id: id2,
+      id,
       uuid,
       title: extractedTitle,
       url: url,
-      timestamp: new Date().toISOString(),
+      timestamp: existing ? (JSON.parse(existing) as Communique).timestamp : new Date().toISOString(),
       html
     };
     
     // Commit no GitHub
-    logger.info('Fazendo commit no GitHub', { id: id2, title: extractedTitle });
-    const commitResult = await commitToGitHub(env, id2, uuid, extractedTitle, html, 2, communique);
+    logger.info('Fazendo commit no GitHub', { id, title: extractedTitle, uuid });
+    const commitResult = await commitToGitHub(env, id, uuid, extractedTitle, html, 2, communique);
     communique.githubSha = commitResult.sha;
     communique.githubUrl = commitResult.githubUrl;
     communique.publicUrl = commitResult.url;
     
     // Salva no KV
-    await env.COMMUNIQUE_STORE.put(id2, JSON.stringify(communique));
-    logger.info('Item salvo com sucesso', { id: id2, title: extractedTitle });
+    await env.COMMUNIQUE_STORE.put(id, JSON.stringify(communique));
+    logger.info('Item salvo com sucesso', { id, title: extractedTitle, publicUrl: communique.publicUrl });
     
-    // Envia email (não bloqueia se falhar)
-    try {
-      await sendEmail(env, communique, commitResult.url);
-    } catch (emailError) {
-      logger.error('Erro ao enviar email (não crítico)', { error: String(emailError) });
+    // Envia email apenas se for novo (não bloqueia se falhar)
+    if (!existing) {
+      try {
+        await sendEmail(env, communique, commitResult.url);
+      } catch (emailError) {
+        logger.error('Erro ao enviar email (não crítico)', { error: String(emailError) });
+      }
     }
     
-    return { success: true, isNew: true };
+    return { success: true, isNew: !existing };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     logger.error('Erro ao verificar URL específica', { url, error: errorMessage, stack: error instanceof Error ? error.stack : undefined });
@@ -2891,8 +2846,8 @@ router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) =
                         }
                     }
                     alert(errorMsg);
-                }
-            } catch (error) {
+    }
+  } catch (error) {
                 alert(\`❌ Erro ao testar email: \${error.message}\`);
             } finally {
                 link.textContent = originalText;
@@ -3940,6 +3895,52 @@ router.get('/admin/test-email', async (request: Request, env: Env, ctx: Executio
         checkSPF: 'Se usar domínio customizado, configure SPF: v=spf1 include:relay.mailchannels.net ~all',
         checkDomain: 'O domínio do EMAIL_FROM precisa estar autorizado no Mailchannels via DNS'
       }
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+});
+
+// Rota de teste para processar URL específica
+router.get('/admin/test-url', async (request: Request, env: Env, ctx: ExecutionContext) => {
+  const authCheck = await requireAdmin(env, request);
+  if (authCheck) return authCheck;
+
+  try {
+    const url = new URL(request.url).searchParams.get('url');
+    if (!url) {
+      return new Response(JSON.stringify({ 
+        success: false,
+        error: 'Parâmetro "url" é obrigatório. Use: /admin/test-url?url=https://...'
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    logger.info('Testando processamento de URL específica', { url });
+    const config = loadConfig(env);
+    const result = await checkSpecificUrl(url, env, config);
+
+    return new Response(JSON.stringify({ 
+      success: result.success,
+      isNew: result.isNew,
+      error: result.error,
+      message: result.success 
+        ? (result.isNew ? 'URL processada com sucesso (novo item)' : 'URL já existia, atualizada se necessário')
+        : `Erro ao processar URL: ${result.error}`,
+      url: url
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    const errorMessage = String(error);
+    logger.error('Erro ao testar URL específica', { error: errorMessage });
+    
+    return new Response(JSON.stringify({ 
+      success: false,
+      error: errorMessage
     }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
