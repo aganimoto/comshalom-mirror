@@ -3173,7 +3173,10 @@ router.get('/', async (request: Request, env: Env, ctx: ExecutionContext) => {
     const isLocalhost = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
     const baseUrl = url.origin;
     
-    // Em produção (workers.dev), redireciona para GitHub Pages
+    // Redirecionamento temporário para portal shalom
+    const redirectUrl = 'https://portal.shalom.tec.br/2025-dezembro-discernimentos';
+    
+    // Em produção (workers.dev), redireciona para portal shalom
     if (!isLocalhost && url.hostname.includes('.workers.dev')) {
       const html = `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -3181,10 +3184,10 @@ router.get('/', async (request: Request, env: Env, ctx: ExecutionContext) => {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ComShalom - Comunicados de Discernimentos</title>
-    <meta http-equiv="refresh" content="0; url=https://go.tomina.ga/">
+    <meta http-equiv="refresh" content="0; url=${redirectUrl}">
 </head>
 <body>
-    <p>Redirecionando para <a href="https://go.tomina.ga/">https://go.tomina.ga/</a></p>
+    <p>Redirecionando para <a href="${redirectUrl}">${redirectUrl}</a></p>
 </body>
 </html>`;
       
@@ -3193,6 +3196,11 @@ router.get('/', async (request: Request, env: Env, ctx: ExecutionContext) => {
           'Content-Type': 'text/html; charset=utf-8'
         }
       });
+    }
+    
+    // Em localhost também redireciona
+    if (isLocalhost) {
+      return Response.redirect(redirectUrl, 302);
     }
     
     // Em desenvolvimento local, serve o frontend inline

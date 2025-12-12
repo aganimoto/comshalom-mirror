@@ -8,19 +8,15 @@ binding = "COMMUNIQUE_STORE"
 id = "833920d9f8ef48e5841372d333536723"
 preview_id = "97942203971a4695bc95b667247a28f0"
 
-# Cron Triggers (executa a cada 2 minutos)
-# DESABILITADO - Workers parados
-# [triggers]
-# crons = ["*/2 * * * *"]
+# Cron Triggers (executa a cada 15 minutos)
+[triggers]
+crons = ["*/15 * * * *"]
 
 # Variáveis de ambiente (definir via wrangler secret put ou dashboard)
-# GITHUB_TOKEN (obrigatório)
-# GITHUB_REPO_OWNER (obrigatório)
-# GITHUB_REPO_NAME (obrigatório)
+# GITHUB_TOKEN
+# GITHUB_REPO_OWNER
+# GITHUB_REPO_NAME
 # ADMIN_KEY (opcional, para proteção das rotas admin)
-# EMAIL_FROM (opcional, para notificações)
-# EMAIL_TO (opcional, para notificações)
-# CUSTOM_DOMAIN (opcional, ex: go.tomina.ga - domínio customizado do GitHub Pages)
-# PATTERNS (opcional, padrões de busca separados por vírgula, ex: "Padrão 1,Padrão 2")
-# RSS_FEEDS (opcional, URLs de feeds RSS separadas por vírgula, ex: "https://comshalom.org/feed/,https://comshalom.org/?s=discernimentos&feed=rss2")
+# EMAIL_FROM
+# EMAIL_TO
 

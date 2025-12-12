@@ -2,42 +2,394 @@
 
 Sistema automatizado de monitoramento de feeds RSS desenvolvido com Cloudflare Workers. Processa comunicados específicos do ComShalom, armazena conteúdo no Cloudflare KV Storage, realiza commits automáticos no GitHub, envia notificações por email e push notifications para dispositivos móveis.
 
+## Badges
+
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue.svg)
+![Cloudflare Workers](https://img.shields.io/badge/Cloudflare%20Workers-Enabled-orange.svg)
+![Node.js](https://img.shields.io/badge/Node.js-18%2B-green.svg)
+
 ## Visão Geral
 
 Solução serverless que monitora feeds RSS, detecta comunicados relevantes através de filtros configuráveis, armazena cópias completas do conteúdo HTML, realiza commits automáticos no GitHub e notifica usuários via email e push notifications.
 
-## Funcionalidades Principais
+### Problema que Resolve
 
-### Monitoramento Automatizado
-- **Cron Trigger**: Execução automática a cada 15 minutos
-- **Múltiplos Feeds**: Suporte a múltiplos feeds RSS configuráveis
-- **Filtragem por Similaridade**: Algoritmo de similaridade de texto (Levenshtein Distance)
-- **Filtro Temporal**: Processa apenas posts a partir de data configurável (padrão: setembro 2025)
+O sistema resolve a necessidade de monitoramento automatizado de comunicados específicos publicados em feeds RSS, fornecendo:
 
-### Armazenamento e Persistência
-- **Cloudflare KV Storage**: Armazenamento persistente de comunicados
-- **Prevenção de Duplicatas**: Validação baseada em hash SHA-256 da URL
-- **GitHub Integration**: Commits automáticos de arquivos HTML no repositório
-- **UUID nos Links**: URLs públicas usam UUID único para melhor identificação
+- Detecção automática de novos comunicados em intervalos configuráveis
+- Armazenamento persistente e versionamento via GitHub
+- Múltiplos canais de notificação (email e push)
+- Interface web para visualização e busca de comunicados
+- Prevenção de duplicatas e otimização de performance
 
-### Notificações
-- **Email**: Notificações via Mailchannels (integrado ao Cloudflare Workers)
-- **Push Notifications**: Notificações push para dispositivos móveis via Service Worker
-- **Múltiplos Destinatários**: Suporte a múltiplos emails separados por vírgula
+### Principais Funcionalidades
 
-### Interface e API
-- **Interface Web**: Frontend responsivo para visualização de comunicados
-- **API REST**: Endpoints administrativos com autenticação
-- **Paginação**: Suporte a paginação e busca na listagem
-- **Cache**: Cache API para otimização de requisições
+- Monitoramento automatizado via cron triggers (execução a cada 15 minutos)
+- Suporte a múltiplos feeds RSS configuráveis
+- Filtragem inteligente por similaridade de texto (algoritmo Levenshtein Distance)
+- Filtro temporal configurável para processar posts a partir de data específica
+- Armazenamento persistente em Cloudflare KV Storage
+- Prevenção de duplicatas baseada em hash SHA-256
+- Integração com GitHub API para commits automáticos
+- Notificações por email via Mailchannels ou Resend
+- Notificações push para dispositivos móveis via Service Worker
+- Interface web responsiva construída com SolidJS
+- API REST com endpoints administrativos protegidos
+- Sistema de cache para otimização de requisições
+- Rate limiting configurável por IP
+- Sanitização HTML para segurança
 
-### Segurança e Performance
-- **Sanitização HTML**: Remoção de scripts e conteúdo malicioso
-- **Rate Limiting**: Limitação de requisições por IP
-- **CORS**: Headers CORS configurados para acesso do frontend
-- **Otimizações Workers**: Cache, processamento paralelo, validações
+### Público-Alvo
+
+Este projeto é direcionado a:
+
+- Desenvolvedores que necessitam monitorar feeds RSS automaticamente
+- Organizações que precisam de sistema de notificações para comunicados importantes
+- Equipes que requerem versionamento automático de conteúdo web
+- Profissionais que buscam solução serverless escalável e econômica
+
+## Requisitos do Sistema
+
+### Linguagens e Frameworks
+
+- **Node.js**: Versão 18 ou superior
+- **TypeScript**: Versão 5.3 ou superior
+- **Bun**: Versão mais recente (para desenvolvimento do frontend, opcional - npm também funciona)
+
+### Dependências de Sistema Operacional
+
+Compatível com:
+- macOS 10.15 ou superior
+- Linux (Ubuntu 20.04+, Debian 10+, ou equivalente)
+- Windows 10 ou superior (via WSL2 recomendado)
+
+### Requisitos de Hardware
+
+Mínimos:
+- 4 GB RAM
+- 2 GB espaço em disco
+- Conexão com internet para deployment e desenvolvimento
+
+### Serviços Externos Necessários
+
+- **Conta Cloudflare**: Conta gratuita ou paga com Workers habilitado
+- **Conta GitHub**: Para armazenamento de arquivos e GitHub Pages
+- **Domínio opcional**: Para configuração de CNAME e domínio customizado
+- **Provedor de email**: Mailchannels (integrado) ou Resend (opcional)
+
+### Ferramentas de Desenvolvimento
+
+- **npm** ou **yarn** ou **bun**: Gerenciador de pacotes
+- **Git**: Controle de versão
+- **Wrangler CLI**: Versão 4.x para deploy e gerenciamento de Workers
+
+## Instalação
+
+### Passo 1: Clonar Repositório
+
+```bash
+git clone https://github.com/aganimoto/comshalom-mirror.git
+cd comshalom-mirror
+```
+
+### Passo 2: Instalar Dependências
+
+Instale as dependências do projeto principal:
+
+```bash
+npm install
+```
+
+Instale as dependências do frontend:
+
+```bash
+cd frontend
+bun install
+# ou
+npm install
+cd ..
+```
+
+### Passo 3: Instalar Wrangler CLI
+
+Instale o Wrangler CLI globalmente:
+
+```bash
+npm install -g wrangler
+```
+
+### Passo 4: Autenticação Cloudflare
+
+Autentique-se no Cloudflare:
+
+```bash
+wrangler login
+```
+
+Siga as instruções no navegador para autorizar o acesso.
+
+### Passo 5: Configurar KV Namespace
+
+Crie o namespace KV para armazenamento de comunicados:
+
+```bash
+# Namespace de produção
+wrangler kv:namespace create "COMMUNIQUE_STORE"
+```
+
+Copie o ID retornado e atualize `wrangler.toml`:
+
+```toml
+[[kv_namespaces]]
+binding = "COMMUNIQUE_STORE"
+id = "ID_RETORNADO"
+preview_id = "ID_RETORNADO"  # Será atualizado no próximo passo
+```
+
+Crie o namespace de preview para desenvolvimento local:
+
+```bash
+wrangler kv:namespace create "COMMUNIQUE_STORE" --preview
+```
+
+Atualize `preview_id` em `wrangler.toml` com o ID retornado.
+
+### Passo 6: Configurar Variáveis de Ambiente
+
+Configure as variáveis obrigatórias:
+
+```bash
+wrangler secret put GITHUB_TOKEN
+wrangler secret put GITHUB_REPO_OWNER
+wrangler secret put GITHUB_REPO_NAME
+```
+
+Configure variáveis opcionais conforme necessário (consulte seção Configuração).
+
+## Configuração
+
+### Arquivos de Configuração
+
+#### wrangler.toml
+
+Arquivo principal de configuração do Cloudflare Worker:
+
+```toml
+name = "comshalom-rss-monitor"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "COMMUNIQUE_STORE"
+id = "SEU_NAMESPACE_ID"
+preview_id = "SEU_PREVIEW_ID"
+
+[triggers]
+crons = ["*/15 * * * *"]  # Executa a cada 15 minutos
+```
+
+#### tsconfig.json
+
+Configuração do TypeScript para compilação e type checking:
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2021",
+    "lib": ["ES2021"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["@cloudflare/workers-types"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  }
+}
+```
+
+### Variáveis de Ambiente
+
+#### Variáveis Obrigatórias
+
+| Variável | Descrição | Como Obter |
+|----------|-----------|------------|
+| `GITHUB_TOKEN` | Token de acesso do GitHub | [GitHub Settings > Tokens](https://github.com/settings/tokens) |
+| `GITHUB_REPO_OWNER` | Proprietário do repositório | Seu usuário ou organização no GitHub |
+| `GITHUB_REPO_NAME` | Nome do repositório | Nome do repositório onde os arquivos serão commitados |
+
+#### Variáveis Opcionais
+
+| Variável | Padrão | Descrição |
+|----------|--------|-----------|
+| `ADMIN_KEY` | - | Chave para autenticação nas rotas administrativas |
+| `EMAIL_FROM` | - | Email de origem para notificações |
+| `EMAIL_TO` | - | Emails destinatários (separados por vírgula) |
+| `EMAIL_ENABLED` | `false` | Habilitar/desabilitar emails (`true` ou `false`) |
+| `EMAIL_REPLY_TO` | - | Email para reply-to |
+| `EMAIL_PROVIDER` | `mailchannels` | Provedor: `mailchannels` ou `resend` |
+| `RESEND_API_KEY` | - | API Key do Resend (necessário se `EMAIL_PROVIDER=resend`) |
+| `CUSTOM_DOMAIN` | - | Domínio customizado do GitHub Pages |
+| `PATTERNS` | `discernimentos` | Padrões de busca (separados por vírgula, use `*` para todos) |
+| `RSS_FEEDS` | `https://comshalom.org/feed/` | URLs de feeds RSS (separadas por vírgula) |
+| `MIN_DATE` | `2025-09-01T00:00:00Z` | Data mínima no formato ISO |
+| `BATCH_SIZE` | `5` | Tamanho do batch (1-10) |
+| `MAX_CONCURRENCY` | `3` | Máximo de itens processados em paralelo (1-10) |
+| `RATE_LIMIT_ENABLED` | `true` | Habilitar rate limiting (`true` ou `false`) |
+| `VAPID_PUBLIC_KEY` | - | Chave pública VAPID para Web Push |
+| `VAPID_PRIVATE_KEY` | - | Chave privada VAPID para Web Push |
+
+### Configuração de Ambientes
+
+#### Desenvolvimento
+
+Para desenvolvimento local, configure os secrets de preview:
+
+```bash
+wrangler secret put GITHUB_TOKEN --env dev
+```
+
+#### Produção
+
+Configure os secrets para produção:
+
+```bash
+wrangler secret put GITHUB_TOKEN
+wrangler secret put GITHUB_REPO_OWNER
+wrangler secret put GITHUB_REPO_NAME
+```
+
+### Configuração do GitHub Token
+
+#### Personal Access Token (Classic)
+
+1. Acesse: https://github.com/settings/tokens
+2. Clique em "Generate new token (classic)"
+3. Defina escopo `repo` (acesso completo a repositórios)
+4. Copie o token gerado
+
+#### Fine-Grained Personal Access Token
+
+1. Acesse: https://github.com/settings/tokens?type=beta
+2. Clique em "Generate new token"
+3. Configure acesso ao repositório específico
+4. Permissões necessárias:
+   - **Contents**: Read and write
+   - **Metadata**: Read-only
+5. Copie o token gerado
+
+### Configuração de Cron Trigger
+
+Edite `wrangler.toml` para ajustar o intervalo de execução:
+
+```toml
+[triggers]
+crons = ["*/15 * * * *"]  # A cada 15 minutos
+```
+
+Formato: `minuto hora dia mês dia-da-semana`
+
+Exemplos:
+- `*/15 * * * *` - A cada 15 minutos
+- `0 */1 * * *` - A cada hora
+- `0 9 * * *` - Diariamente às 9h
+- `0 9 * * 1-5` - Dias úteis às 9h
+
+## Uso
+
+### Execução Local
+
+Inicie o servidor de desenvolvimento:
+
+```bash
+npm run dev
+```
+
+O servidor estará disponível em `http://localhost:8787`.
+
+### Teste Manual
+
+Verifique a saúde do Worker:
+
+```bash
+curl http://localhost:8787/health
+```
+
+Execute processamento RSS manualmente:
+
+```bash
+curl http://localhost:8787/test
+```
+
+### Rotas Administrativas
+
+Listar comunicados:
+
+```bash
+curl -H "X-ADMIN-KEY: sua-chave" http://localhost:8787/admin/list
+```
+
+Visualizar comunicado específico:
+
+```bash
+curl -H "X-ADMIN-KEY: sua-chave" http://localhost:8787/admin/view/ID_DO_COMUNICADO
+```
+
+Obter estatísticas:
+
+```bash
+curl -H "X-ADMIN-KEY: sua-chave" http://localhost:8787/admin/stats
+```
+
+### Comandos Principais
+
+```bash
+# Desenvolvimento
+npm run dev                    # Inicia servidor de desenvolvimento
+npm run frontend:dev           # Inicia frontend em modo desenvolvimento
+
+# Build
+npm run frontend:build         # Compila frontend para produção
+
+# Deploy
+npm run deploy                 # Faz deploy do Worker para produção
+npm run tail                   # Monitora logs em tempo real
+```
+
+### Casos de Uso Comuns
+
+#### Processar Todos os Posts
+
+Configure a variável de ambiente:
+
+```bash
+wrangler secret put PATTERNS
+# Valor: "*"
+```
+
+#### Múltiplos Feeds RSS
+
+```bash
+wrangler secret put RSS_FEEDS
+# Valor: "https://comshalom.org/feed/,https://outro-feed.com/rss"
+```
+
+#### Ajustar Performance
+
+```bash
+# Tamanho do batch
+wrangler secret put BATCH_SIZE
+# Valor: "10"
+
+# Máxima concorrência
+wrangler secret put MAX_CONCURRENCY
+# Valor: "5"
+```
 
 ## Arquitetura
+
+### Diagrama de Arquitetura
 
 ```
 ┌─────────────────┐
@@ -67,287 +419,93 @@ Solução serverless que monitora feeds RSS, detecta comunicados relevantes atra
     └────────┘    └──────────┘
 ```
 
-## Requisitos
+### Stack Tecnológica
 
-- **Conta Cloudflare** (gratuita)
-- **Conta GitHub**
-- **Node.js** 18 ou superior
-- **npm** ou **yarn**
-- **Wrangler CLI** 4.x
+#### Backend
 
-## Instalação
+- **Cloudflare Workers**: Runtime serverless para execução do código
+- **TypeScript**: Linguagem de programação
+- **itty-router**: Roteamento HTTP para Workers
+- **Cloudflare KV**: Armazenamento de chave-valor
+- **GitHub API**: Versionamento e armazenamento de arquivos
 
-### 1. Clonar Repositório
+#### Frontend
 
-```bash
-git clone https://github.com/aganimoto/comshalom-mirror.git
-cd comshalom-mirror
-```
+- **SolidJS**: Framework JavaScript reativo
+- **TypeScript**: Type safety
+- **Vite**: Build tool e dev server
+- **CSS Modules**: Estilização modular
 
-### 2. Instalar Dependências
+#### Infraestrutura
 
-```bash
-npm install
-```
+- **GitHub Pages**: Hospedagem estática do frontend
+- **Cloudflare Workers**: Execução serverless
+- **Cloudflare KV**: Persistência de dados
+- **Mailchannels/Resend**: Envio de emails
 
-### 3. Instalar Wrangler CLI
+### Padrões de Design
 
-```bash
-npm install -g wrangler
-```
+- **Singleton Pattern**: Configuração centralizada
+- **Factory Pattern**: Geração de respostas HTTP otimizadas
+- **Strategy Pattern**: Múltiplos provedores de email
+- **Repository Pattern**: Abstração de acesso ao KV Storage
+- **Observer Pattern**: Sistema de notificações
 
-### 4. Autenticação Cloudflare
-
-```bash
-wrangler login
-```
-
-## Configuração
-
-### KV Namespace
-
-Criar namespace para armazenamento de comunicados:
-
-```bash
-wrangler kv:namespace create "COMMUNIQUE_STORE"
-```
-
-Copiar o ID retornado e atualizar `wrangler.toml`:
-
-```toml
-[[kv_namespaces]]
-binding = "COMMUNIQUE_STORE"
-id = "ID_RETORNADO"
-preview_id = "ID_RETORNADO"
-```
-
-Para desenvolvimento local, criar namespace de preview:
-
-```bash
-wrangler kv:namespace create "COMMUNIQUE_STORE" --preview
-```
-
-Atualizar `preview_id` em `wrangler.toml` com o ID retornado.
-
-### Variáveis de Ambiente Obrigatórias
-
-```bash
-wrangler secret put GITHUB_TOKEN
-wrangler secret put GITHUB_REPO_OWNER
-wrangler secret put GITHUB_REPO_NAME
-```
-
-### Variáveis de Ambiente Opcionais
-
-```bash
-# Autenticação
-wrangler secret put ADMIN_KEY
-
-# Notificações por Email
-wrangler secret put EMAIL_FROM
-wrangler secret put EMAIL_TO
-
-# Configuração de Domínio
-wrangler secret put CUSTOM_DOMAIN
-
-# Filtros e Feeds
-wrangler secret put PATTERNS
-wrangler secret put RSS_FEEDS
-wrangler secret put MIN_DATE
-
-# Performance
-wrangler secret put BATCH_SIZE
-wrangler secret put MAX_CONCURRENCY
-wrangler secret put RATE_LIMIT_ENABLED
-```
-
-### Descrição das Variáveis
-
-| Variável | Obrigatório | Descrição |
-|----------|-------------|-----------|
-| `GITHUB_TOKEN` | Sim | Token de acesso do GitHub (Personal Access Token) |
-| `GITHUB_REPO_OWNER` | Sim | Proprietário do repositório GitHub |
-| `GITHUB_REPO_NAME` | Sim | Nome do repositório GitHub |
-| `ADMIN_KEY` | Não | Chave para autenticação nas rotas admin |
-| `EMAIL_FROM` | Não | Email de origem para notificações |
-| `EMAIL_TO` | Não | Emails destinatários (separados por vírgula) |
-| `CUSTOM_DOMAIN` | Não | Domínio customizado do GitHub Pages |
-| `PATTERNS` | Não | Padrões de busca (separados por vírgula, padrão: "discernimentos") |
-| `RSS_FEEDS` | Não | URLs de feeds RSS (separadas por vírgula) |
-| `MIN_DATE` | Não | Data mínima no formato ISO (padrão: 2025-09-01T00:00:00Z) |
-| `BATCH_SIZE` | Não | Tamanho do batch para processamento (padrão: 5) |
-| `MAX_CONCURRENCY` | Não | Máximo de itens processados em paralelo (padrão: 3) |
-| `RATE_LIMIT_ENABLED` | Não | Habilitar rate limiting (padrão: true) |
-| `VAPID_PUBLIC_KEY` | Não | Chave pública VAPID para Web Push |
-| `VAPID_PRIVATE_KEY` | Não | Chave privada VAPID para Web Push |
-
-### Token GitHub
-
-#### Personal Access Token (Classic)
-
-1. Acessar: https://github.com/settings/tokens
-2. Gerar novo token (classic)
-3. Definir escopo `repo` (acesso completo a repositórios)
-4. Copiar o token gerado
-
-#### Fine-Grained Personal Access Token
-
-1. Acessar: https://github.com/settings/tokens?type=beta
-2. Gerar novo token
-3. Configurar acesso ao repositório específico
-4. Permissões necessárias:
-   - **Contents**: Read and write
-   - **Metadata**: Read-only
-
-## Execução Local
-
-### Servidor de Desenvolvimento
-
-```bash
-npm run dev
-```
-
-Servidor disponível em `http://localhost:8787`.
-
-### Teste Manual
-
-```bash
-# Health check
-curl http://localhost:8787/health
-
-# Executar processamento manualmente
-curl http://localhost:8787/test
-```
-
-### Rotas Administrativas
-
-```bash
-# Listar comunicados
-curl -H "X-ADMIN-KEY: sua-chave" http://localhost:8787/admin/list
-
-# Visualizar comunicado específico
-curl -H "X-ADMIN-KEY: sua-chave" http://localhost:8787/admin/view/ID
-
-# Estatísticas
-curl -H "X-ADMIN-KEY: sua-chave" http://localhost:8787/admin/stats
-```
-
-## Deploy
-
-### Deploy para Produção
-
-```bash
-npm run deploy
-```
-
-Worker disponível em `https://comshalom-rss-monitor.SUBDOMINIO.workers.dev`.
-
-### Verificar Logs
-
-```bash
-npm run tail
-```
-
-### Registrar Subdomínio workers.dev
-
-Antes do primeiro deploy, é necessário registrar um subdomínio:
-
-1. Acessar: https://dash.cloudflare.com
-2. Workers & Pages → Overview
-3. Registrar subdomínio workers.dev
-
-## Estrutura do Projeto
+### Estrutura de Diretórios
 
 ```
 comshalom-mirror/
-├── src/
-│   ├── index.ts              # Código principal do Worker
-│   ├── types.ts              # Definições de tipos TypeScript
-│   └── utils/
-│       ├── cache.ts          # Cache API utilities
-│       ├── config.ts         # Configuração centralizada
-│       ├── logger.ts         # Logging estruturado
-│       ├── rateLimit.ts      # Rate limiting
-│       ├── rssParser.ts      # Parser RSS melhorado
-│       ├── sanitize.ts       # Sanitização HTML
-│       ├── webpush.ts        # Web Push utilities
-│       └── workers.ts        # Otimizações específicas Workers
-├── public/
-│   ├── index.html            # Frontend web
-│   └── sw.js                 # Service Worker para push notifications
+├── src/                        # Código fonte do Worker
+│   ├── index.ts               # Entry point e rotas principais
+│   ├── types.ts               # Definições de tipos TypeScript
+│   └── utils/                 # Utilitários
+│       ├── cache.ts           # Cache API utilities
+│       ├── config.ts          # Configuração centralizada
+│       ├── logger.ts          # Logging estruturado
+│       ├── rateLimit.ts       # Rate limiting
+│       ├── rssParser.ts       # Parser RSS
+│       ├── sanitize.ts        # Sanitização HTML
+│       ├── webpush.ts         # Web Push utilities
+│       └── workers.ts         # Otimizações específicas Workers
+├── frontend/                   # Aplicação frontend
+│   ├── src/
+│   │   ├── components/        # Componentes React/SolidJS
+│   │   ├── routes/            # Rotas da aplicação
+│   │   ├── hooks/             # Custom hooks
+│   │   ├── api.ts             # Cliente API
+│   │   └── index.tsx          # Entry point
+│   ├── public/                # Assets estáticos
+│   ├── package.json
+│   └── vite.config.ts
+├── public/                     # Assets para GitHub Pages
+│   ├── index.html
+│   ├── sw.js                  # Service Worker
+│   └── assets/                # Arquivos compilados
+├── pages/                      # Páginas HTML dos comunicados
+├── scripts/                    # Scripts auxiliares
+│   ├── check-spf.sh          # Verificação de configuração SPF
+│   ├── setup-email.sh        # Configuração de email
+│   └── verify-email-config.sh # Verificação de configuração de email
 ├── package.json
 ├── tsconfig.json
 ├── wrangler.toml
-└── README.md
+├── CNAME                       # Configuração de domínio customizado
+├── README.md
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+└── LICENSE
 ```
 
-## Configuração do GitHub Pages
-
-### 1. Arquivo CNAME
-
-O arquivo `CNAME` na raiz do repositório configura o domínio customizado:
-
-```
-go.tomina.ga
-```
-
-### 2. Configuração DNS
-
-No provedor DNS do domínio `tomina.ga`, criar registro CNAME:
-
-```
-Tipo: CNAME
-Nome: go
-Valor: aganimoto.github.io
-TTL: 3600 (ou padrão)
-```
-
-### 3. Configuração no GitHub
-
-1. Acessar: https://github.com/aganimoto/comshalom-mirror/settings/pages
-2. **Source**: Branch `main`, folder `/ (root)`
-3. **Custom domain**: `go.tomina.ga`
-4. Marcar **"Enforce HTTPS"** após verificação
-
-### 4. Verificação
-
-```bash
-dig go.tomina.ga +nostats +nocomments +nocmd
-```
-
-O resultado deve mostrar CNAME apontando para `aganimoto.github.io`.
-
-## Notificações Push
-
-### Ativação no Dispositivo Móvel
-
-1. Acessar `https://go.tomina.ga` no navegador do celular
-2. Clicar no botão **"🔕 Ativar Notificações"**
-3. Permitir notificações quando solicitado
-4. Notificações serão recebidas automaticamente quando novos comunicados forem detectados
-
-### Funcionamento
-
-- **Service Worker**: Registrado no navegador para receber notificações
-- **Polling**: Verifica a cada 30 segundos se há novos comunicados
-- **Notificações**: Exibidas mesmo com o navegador fechado (se Service Worker ativo)
-- **Clique na Notificação**: Abre o comunicado diretamente
-
-### Requisitos
-
-- Navegador com suporte a Service Workers (Chrome, Firefox, Safari, Edge)
-- HTTPS (necessário para Service Workers)
-- Permissão de notificações concedida
-
-## API REST
+## API/Endpoints
 
 ### Endpoints Públicos
 
-#### `GET /health`
+#### GET /health
 
-Status do Worker e conectividade.
+Verifica o status do Worker e conectividade com serviços externos.
 
 **Resposta:**
+
 ```json
 {
   "status": "ok",
@@ -357,39 +515,57 @@ Status do Worker e conectividade.
 }
 ```
 
-#### `GET /test`
+**Códigos de Status HTTP:**
+- `200 OK`: Worker operacional
+- `500 Internal Server Error`: Erro de conectividade
 
-Execução manual do processamento RSS.
+#### GET /test
+
+Executa processamento RSS manualmente (útil para testes).
 
 **Resposta:**
+
 ```json
 {
   "success": true,
-  "message": "Processamento iniciado em background",
-  "status": "processing"
+  "message": "RSS processado com sucesso",
+  "stats": {
+    "processed": 10,
+    "new": 2,
+    "skipped": 8
+  }
 }
 ```
+
+**Códigos de Status HTTP:**
+- `200 OK`: Processamento iniciado
+- `500 Internal Server Error`: Erro no processamento
 
 ### Endpoints Administrativos
 
 Todos os endpoints administrativos requerem header `X-ADMIN-KEY`.
 
-#### `GET /admin/list`
+#### GET /admin/list
 
-Lista todos os comunicados salvos.
+Lista todos os comunicados salvos com suporte a paginação e busca.
+
+**Headers:**
+- `X-ADMIN-KEY`: Chave de autenticação (obrigatório)
 
 **Query Parameters:**
 - `limit` (opcional): Número de itens por página (padrão: 50, máximo: 100)
 - `cursor` (opcional): Cursor para paginação
-- `search` (opcional): Termo de busca
+- `search` (opcional): Termo de busca (busca no título)
 
-**Exemplo:**
+**Exemplo de Requisição:**
+
 ```bash
 curl -H "X-ADMIN-KEY: sua-chave" \
      "https://worker.workers.dev/admin/list?limit=10&search=discernimentos"
 ```
 
 **Resposta:**
+
 ```json
 {
   "count": 10,
@@ -399,33 +575,68 @@ curl -H "X-ADMIN-KEY: sua-chave" \
   "items": [
     {
       "id": "abc123...",
-      "title": "Comunicado...",
-      "url": "https://...",
+      "title": "Comunicado sobre Discernimentos",
+      "url": "https://comshalom.org/comunicado",
       "timestamp": "2025-12-12T10:00:00.000Z",
-      "githubUrl": "https://github.com/...",
-      "publicUrl": "https://go.tomina.ga/pages/UUID-slug.html"
+      "githubUrl": "https://github.com/user/repo/blob/main/pages/uuid.html",
+      "publicUrl": "https://go.tomina.ga/pages/uuid-slug.html"
     }
   ]
 }
 ```
 
-#### `GET /admin/view/:id`
+**Códigos de Status HTTP:**
+- `200 OK`: Lista retornada com sucesso
+- `401 Unauthorized`: Chave de autenticação inválida ou ausente
+- `500 Internal Server Error`: Erro ao recuperar dados
 
-Visualiza HTML completo de um comunicado.
+#### GET /admin/view/:id
 
-**Exemplo:**
+Visualiza HTML completo de um comunicado específico.
+
+**Headers:**
+- `X-ADMIN-KEY`: Chave de autenticação (obrigatório)
+
+**Path Parameters:**
+- `id`: ID do comunicado (hash SHA-256)
+
+**Exemplo de Requisição:**
+
 ```bash
 curl -H "X-ADMIN-KEY: sua-chave" \
      "https://worker.workers.dev/admin/view/abc123..."
 ```
 
-**Resposta:** HTML formatado com wrapper profissional.
+**Resposta:**
 
-#### `GET /admin/stats`
+HTML formatado com wrapper profissional incluindo:
+- Headers e metadados
+- Estilos CSS inline
+- Conteúdo sanitizado do comunicado
+- Links para fonte original e GitHub
 
-Estatísticas do sistema.
+**Códigos de Status HTTP:**
+- `200 OK`: HTML retornado com sucesso
+- `401 Unauthorized`: Chave de autenticação inválida
+- `404 Not Found`: Comunicado não encontrado
+- `500 Internal Server Error`: Erro ao recuperar comunicado
+
+#### GET /admin/stats
+
+Retorna estatísticas do sistema.
+
+**Headers:**
+- `X-ADMIN-KEY`: Chave de autenticação (obrigatório)
+
+**Exemplo de Requisição:**
+
+```bash
+curl -H "X-ADMIN-KEY: sua-chave" \
+     "https://worker.workers.dev/admin/stats"
+```
 
 **Resposta:**
+
 ```json
 {
   "total": 25,
@@ -436,96 +647,227 @@ Estatísticas do sistema.
 }
 ```
 
+**Códigos de Status HTTP:**
+- `200 OK`: Estatísticas retornadas
+- `401 Unauthorized`: Chave de autenticação inválida
+- `500 Internal Server Error`: Erro ao calcular estatísticas
+
 ### Endpoints de Notificações Push
 
-#### `GET /api/push/check`
+#### GET /api/push/check
 
-Verifica se há nova notificação (usado pelo Service Worker).
+Verifica se há nova notificação (usado pelo Service Worker para polling).
 
 **Headers:**
-- `X-Last-Check`: Timestamp da última verificação
+- `X-Last-Check` (opcional): Timestamp da última verificação em milissegundos
+
+**Exemplo de Requisição:**
+
+```bash
+curl -H "X-Last-Check: 1702380000000" \
+     "https://worker.workers.dev/api/push/check"
+```
 
 **Resposta:**
+
 ```json
 {
   "hasNew": true,
   "notification": {
     "title": "Novo Comunicado Detectado",
     "body": "Título do comunicado",
-    "url": "https://go.tomina.ga/...",
+    "url": "https://go.tomina.ga/pages/uuid-slug.html",
     "icon": "/icon-192x192.png",
     "timestamp": 1702380000000
   }
 }
 ```
 
-## Configuração Avançada
+**Códigos de Status HTTP:**
+- `200 OK`: Resposta retornada
+- `204 No Content`: Não há novas notificações (quando `hasNew: false`)
 
-### Filtros de Busca
+## Testes
 
-Por padrão, o sistema busca posts com "discernimentos" no título a partir de setembro de 2025.
+### Estratégia de Testes
 
-**Configurar via variável de ambiente:**
-```bash
-wrangler secret put PATTERNS
-# Valor: "discernimentos,envio,disciples"
-```
+Atualmente, o projeto utiliza testes manuais devido à natureza serverless e integrações externas. A estratégia recomendada inclui:
 
-**Processar todos os posts:**
-```bash
-wrangler secret put PATTERNS
-# Valor: "*"
-```
+- **Testes Unitários**: Funções utilitárias isoladas
+- **Testes de Integração**: Fluxos completos com mocks
+- **Testes End-to-End**: Cenários reais com ambiente de staging
 
-### Múltiplos Feeds RSS
+### Executar Testes Manualmente
+
+#### Teste de Conectividade
 
 ```bash
-wrangler secret put RSS_FEEDS
-# Valor: "https://comshalom.org/feed/,https://comshalom.org/?s=discernimentos&feed=rss2"
+curl http://localhost:8787/health
 ```
 
-### Data Mínima
+#### Teste de Processamento RSS
 
 ```bash
-wrangler secret put MIN_DATE
-# Valor: "2025-09-01T00:00:00Z"
+curl http://localhost:8787/test
 ```
 
-### Performance
+#### Teste de Autenticação
 
 ```bash
-# Tamanho do batch (1-10)
-wrangler secret put BATCH_SIZE
-# Valor: "5"
-
-# Máximo de concorrência (1-10)
-wrangler secret put MAX_CONCURRENCY
-# Valor: "3"
-
-# Desabilitar rate limiting
-wrangler secret put RATE_LIMIT_ENABLED
-# Valor: "false"
+curl -H "X-ADMIN-KEY: chave-invalida" http://localhost:8787/admin/list
+# Deve retornar 401
 ```
 
-### Intervalo do Cron
+### Cobertura de Testes
 
-Editar `wrangler.toml`:
+A implementação de testes automatizados está planejada para versões futuras. Atualmente, a cobertura é garantida através de:
 
-```toml
-[triggers]
-crons = ["*/15 * * * *"]  # A cada 15 minutos
+- Testes manuais em ambiente de desenvolvimento
+- Validação de fluxos críticos em produção
+- Monitoramento de logs e métricas
+
+## Deploy
+
+### Requisitos de Infraestrutura
+
+- Conta Cloudflare com Workers habilitado
+- Repositório GitHub configurado
+- KV Namespace criado e configurado
+- Secrets configurados via Wrangler CLI
+
+### Processo de Deploy
+
+#### Passo 1: Build do Frontend
+
+```bash
+npm run frontend:build
 ```
 
-Formato: `minuto hora dia mês dia-da-semana`
+Isso compila o frontend e copia os arquivos para a pasta `public/`.
 
-Exemplos:
-- `*/15 * * * *` - A cada 15 minutos
-- `0 */1 * * *` - A cada hora
-- `0 9 * * *` - Diariamente às 9h
+#### Passo 2: Commit e Push
 
-## Troubleshooting
+```bash
+git add public/ index.html assets/
+git commit -m "build: atualizar frontend"
+git push origin main
+```
 
-### KV namespace not found
+#### Passo 3: Deploy do Worker
+
+```bash
+npm run deploy
+```
+
+O Worker será deployado e estará disponível em:
+`https://comshalom-rss-monitor.SUBDOMINIO.workers.dev`
+
+### Configurações Específicas de Produção
+
+#### Registrar Subdomínio workers.dev
+
+Antes do primeiro deploy:
+
+1. Acesse: https://dash.cloudflare.com
+2. Navegue para Workers & Pages → Overview
+3. Registre um subdomínio workers.dev
+
+#### Configurar Secrets em Produção
+
+```bash
+wrangler secret put GITHUB_TOKEN
+wrangler secret put ADMIN_KEY
+wrangler secret put EMAIL_FROM
+# ... outras variáveis conforme necessário
+```
+
+#### Verificar Deploy
+
+Verifique os logs em tempo real:
+
+```bash
+npm run tail
+```
+
+### Monitoramento e Logs
+
+#### Logs em Tempo Real
+
+```bash
+npm run tail
+```
+
+#### Logs Estruturados
+
+Todos os logs são estruturados em JSON com:
+
+```json
+{
+  "timestamp": "2025-12-12T10:00:00.000Z",
+  "level": "info",
+  "message": "Mensagem do log",
+  "metadata": {
+    "key": "value"
+  }
+}
+```
+
+#### Métricas
+
+Acesse `/admin/stats` para estatísticas do sistema:
+- Total de comunicados
+- Comunicados com commit no GitHub
+- Último processamento
+- Timestamp da consulta
+
+## Manutenção
+
+### Procedimentos de Backup
+
+#### Backup do KV Storage
+
+O KV Storage é automaticamente sincronizado com o GitHub através de commits automáticos. Para backup manual:
+
+1. Liste todas as chaves: `wrangler kv:key list --namespace-id ID`
+2. Recupere valores individuais: `wrangler kv:key get CHAVE --namespace-id ID`
+3. Exporte para arquivo JSON conforme necessário
+
+#### Backup do GitHub
+
+O repositório GitHub é a fonte de verdade principal. Para backup:
+
+```bash
+git clone https://github.com/USER/REPO.git
+```
+
+### Atualizações de Dependências
+
+#### Atualizar Dependências do Worker
+
+```bash
+npm outdated
+npm update
+npm audit fix
+```
+
+#### Atualizar Dependências do Frontend
+
+```bash
+cd frontend
+bun outdated
+bun update
+cd ..
+```
+
+#### Atualizar Wrangler CLI
+
+```bash
+npm install -g wrangler@latest
+```
+
+### Troubleshooting Comum
+
+#### KV namespace not found
 
 **Problema:** Erro ao acessar KV namespace.
 
@@ -534,7 +876,7 @@ Exemplos:
 2. Confirmar criação: `wrangler kv:namespace list`
 3. Verificar binding: `wrangler kv:key list --namespace-id ID`
 
-### GitHub API error: 401
+#### GitHub API error: 401
 
 **Problema:** Token inválido ou sem permissões.
 
@@ -546,7 +888,7 @@ Exemplos:
    ```
 3. Verificar permissões do token (deve ter `repo` ou `Contents: Read and write`)
 
-### GitHub API error: 404
+#### GitHub API error: 404
 
 **Problema:** Repositório não encontrado.
 
@@ -555,7 +897,7 @@ Exemplos:
 2. Confirmar existência do repositório
 3. Verificar acesso do token ao repositório
 
-### Cron não executa
+#### Cron não executa
 
 **Problema:** Cron Trigger não está executando.
 
@@ -565,7 +907,7 @@ Exemplos:
 3. Verificar configuração no Cloudflare Dashboard
 4. Confirmar formato do cron em `wrangler.toml`
 
-### Email não enviado
+#### Email não enviado
 
 **Problema:** Notificações por email não são enviadas.
 
@@ -575,9 +917,9 @@ Exemplos:
 3. Para produção, configurar registros SPF/DKIM no domínio de origem
 4. Verificar formato dos emails (devem ser válidos)
 
-### Notificações push não funcionam
+#### Notificações push não funcionam
 
-**Problema:** Notificações push não aparecem no celular.
+**Problema:** Notificações push não aparecem no dispositivo.
 
 **Solução:**
 1. Verificar se está usando HTTPS (necessário para Service Workers)
@@ -586,7 +928,7 @@ Exemplos:
 4. Verificar console do navegador para erros
 5. Confirmar que `/sw.js` está acessível
 
-### Erro de CORS
+#### Erro de CORS
 
 **Problema:** Erro de CORS ao acessar API do frontend.
 
@@ -595,94 +937,63 @@ Exemplos:
 2. Verificar header `Origin` nas requisições
 3. Confirmar que frontend e Worker estão no mesmo domínio ou configurados corretamente
 
-## Monitoramento e Logs
+## Contribuição
 
-### Logs em Tempo Real
+Contribuições são bem-vindas. Por favor, consulte o arquivo [CONTRIBUTING.md](CONTRIBUTING.md) para diretrizes detalhadas.
 
-```bash
-npm run tail
-```
+### Processo de Contribuição
 
-### Logs Estruturados
+1. Fork o repositório
+2. Crie uma branch para sua feature (`git checkout -b feature/nova-feature`)
+3. Commit suas mudanças (`git commit -m 'feat: adiciona nova feature'`)
+4. Push para a branch (`git push origin feature/nova-feature`)
+5. Abra um Pull Request
 
-Todos os logs são estruturados em JSON com:
-- `timestamp`: Data e hora ISO
-- `level`: Nível do log (info, warn, error, debug)
-- `message`: Mensagem do log
-- `metadata`: Dados adicionais (opcional)
+### Padrões de Código
 
-### Métricas
+- Siga os padrões TypeScript definidos no projeto
+- Use Conventional Commits para mensagens de commit
+- Mantenha a documentação atualizada
+- Adicione comentários para lógica complexa
 
-Acessar `/admin/stats` para estatísticas do sistema:
-- Total de comunicados
-- Comunicados com commit no GitHub
-- Último processamento
-- Timestamp da consulta
+Consulte [CONTRIBUTING.md](CONTRIBUTING.md) para mais detalhes.
 
-## Segurança
+## Versionamento
 
-### Autenticação
+Este projeto segue [Semantic Versioning](https://semver.org/lang/pt-BR/) (SemVer).
 
-- Rotas administrativas protegidas com `X-ADMIN-KEY`
-- Rate limiting configurável para prevenir abuso
-- Validação de entrada em todos os endpoints
+Formato: `MAJOR.MINOR.PATCH`
 
-### Sanitização
+- **MAJOR**: Mudanças incompatíveis na API
+- **MINOR**: Adição de funcionalidades compatíveis
+- **PATCH**: Correções de bugs compatíveis
 
-- HTML sanitizado antes de armazenar
-- Remoção de scripts e conteúdo malicioso
-- Escape de HTML para prevenir XSS
-
-### CORS
-
-- Headers CORS configurados para origens permitidas
-- Suporte a múltiplos domínios (localhost, produção)
-
-## Limitações Conhecidas
-
-### Segurança
-
-1. **ADMIN_KEY no Frontend**: A chave de administração está exposta no código do frontend (`index.html`). Recomenda-se implementar autenticação baseada em sessão ou OAuth.
-
-2. **Rate Limiting em Memória**: O rate limiting atual é em memória e não persiste entre reinicializações do Worker. Para produção crítica, recomenda-se usar Cloudflare KV ou Durable Objects.
-
-3. **Validação de Tamanho de Requisições**: Requisições muito grandes podem causar problemas. Limites de tamanho devem ser configurados conforme necessário.
-
-### Confiabilidade
-
-1. **Dependência do KV Storage**: Dados são armazenados no Cloudflare KV. Não há backup automático. Recomenda-se implementar sincronização periódica com GitHub.
-
-2. **Retry para KV**: Operações de KV não possuem retry automático. Falhas temporárias podem resultar em perda de dados.
-
-3. **Processamento em Batches**: Itens são processados em batches. Falhas em um item podem afetar o processamento do batch inteiro.
-
-4. **Dependência do GitHub API**: Se a API do GitHub estiver indisponível, os arquivos não são criados, mesmo que o item seja salvo no KV.
-
-### Performance
-
-1. **Cache com TTL Fixo**: O cache possui TTL fixo. Para diferentes tipos de conteúdo, TTLs diferentes seriam mais eficientes.
-
-2. **HTML Não Comprimido**: HTML é armazenado sem compressão, ocupando mais espaço no KV e GitHub.
-
-3. **Frontend Inline**: O HTML do frontend está inline no Worker, aumentando o tamanho do bundle.
-
-### Manutenibilidade
-
-1. **Schema Não Versionado**: Mudanças no schema do `Communique` podem quebrar itens antigos. Recomenda-se implementar versionamento de schema.
-
-2. **Logs Sem Rotação**: Logs podem crescer indefinidamente. Recomenda-se implementar rotação ou limpeza periódica.
-
-3. **Sem Testes Automatizados**: Não há testes unitários ou de integração. Recomenda-se adicionar testes para garantir qualidade.
-
-### Escalabilidade
-
-1. **Limite de KV**: Cloudflare KV possui limites de tamanho (25MB por valor, 100GB por namespace). Para grandes volumes, recomenda-se arquitetura distribuída.
-
-2. **Limite de Worker CPU Time**: Workers possuem limite de CPU time por requisição. Processamento muito intensivo pode exceder limites.
-
-3. **Monitoramento Básico**: Métricas básicas estão disponíveis. Não há alertas ou dashboards avançados.
-
+Consulte [CHANGELOG.md](CHANGELOG.md) para histórico detalhado de versões.
 
 ## Licença
 
-MIT
+Este projeto está licenciado sob a Licença MIT. Consulte o arquivo [LICENSE](LICENSE) para mais detalhes.
+
+## Autores e Contato
+
+### Autor
+
+Eduardo Tominaga
+
+### Canais de Comunicação
+
+- **Issues**: [GitHub Issues](https://github.com/aganimoto/comshalom-mirror/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/aganimoto/comshalom-mirror/discussions)
+
+### Documentação Adicional
+
+- [CHANGELOG.md](CHANGELOG.md) - Histórico de versões
+- [CONTRIBUTING.md](CONTRIBUTING.md) - Guia de contribuição
+- [LICENSE](LICENSE) - Licença do projeto
+
+### Referências
+
+- [Cloudflare Workers Documentation](https://developers.cloudflare.com/workers/)
+- [GitHub API Documentation](https://docs.github.com/en/rest)
+- [TypeScript Documentation](https://www.typescriptlang.org/docs/)
+- [SolidJS Documentation](https://www.solidjs.com/docs/latest)
