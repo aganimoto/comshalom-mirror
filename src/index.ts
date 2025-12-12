@@ -648,6 +648,15 @@ async function sendEmail(
   // Trunca assunto para evitar problemas
   const subject = `Novo Comunicado: ${truncateText(communique.title, 50)}`;
 
+  // Log do domínio usado para debug
+  const emailFromDomain = env.EMAIL_FROM.split('@')[1];
+  logger.info('Preparando envio de email', {
+    emailFrom: env.EMAIL_FROM,
+    emailFromDomain: emailFromDomain,
+    recipients: recipients.length,
+    subject: subject
+  });
+
   // Gera conteúdo HTML e texto
   const htmlContent = generateEmailHTML(communique, githubUrl);
   const textContent = generateEmailText(communique, githubUrl);
@@ -703,8 +712,22 @@ async function sendEmail(
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`Mailchannels error: ${response.status} - ${error}`);
+        const errorText = await response.text();
+        let errorMessage = `Mailchannels error: ${response.status}`;
+        
+        // Mensagens de erro mais amigáveis
+        if (response.status === 401) {
+          const emailFromDomain = env.EMAIL_FROM ? env.EMAIL_FROM.split('@')[1] : 'não configurado';
+          errorMessage = `Erro de autenticação (401): O Mailchannels requer configuração DNS (SPF). EMAIL_FROM atual: ${env.EMAIL_FROM || 'não configurado'}. Verifique se o domínio "${emailFromDomain}" tem SPF configurado (v=spf1 include:relay.mailchannels.net ~all) no DNS. Detalhes: ${errorText.substring(0, 200)}`;
+        } else if (response.status === 403) {
+          errorMessage = `Erro de permissão (403): O domínio não está autorizado. Verifique a configuração SPF/DKIM. Detalhes: ${errorText.substring(0, 200)}`;
+        } else if (response.status === 400) {
+          errorMessage = `Erro de validação (400): Verifique os dados do email. Detalhes: ${errorText.substring(0, 200)}`;
+        } else {
+          errorMessage = `Mailchannels error: ${response.status} - ${errorText.substring(0, 200)}`;
+        }
+        
+        throw new Error(errorMessage);
       }
       
       // Log de sucesso
@@ -2614,11 +2637,27 @@ router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) =
                 const data = await response.json();
                 
                 if (data.success) {
-                    alert(\`✅ Email de teste enviado com sucesso!\\n\\nDestinatários: \${data.recipients}\\nTítulo: \${data.communique.title}\`);
+                    alert('✅ Email de teste enviado com sucesso!\\n\\nDestinatários: ' + data.recipients + '\\nTítulo: ' + data.communique.title);
                 } else {
-                    alert(\`❌ Erro ao enviar email: \${data.error || data.message}\`);
-    }
-  } catch (error) {
+                    let errorMsg = '❌ Erro ao enviar email\\n\\n' + (data.message || data.error);
+                    if (data.help) {
+                        errorMsg += '\\n\\n💡 Dica: ' + data.help;
+                    }
+                    if (data.troubleshooting) {
+                        errorMsg += '\\n\\n📋 Verificações:\\n';
+                        if (data.troubleshooting.checkEmailConfig) {
+                            errorMsg += '• ' + data.troubleshooting.checkEmailConfig + '\\n';
+                        }
+                        if (data.troubleshooting.checkSPF) {
+                            errorMsg += '• ' + data.troubleshooting.checkSPF + '\\n';
+                        }
+                        if (data.troubleshooting.checkDomain) {
+                            errorMsg += '• ' + data.troubleshooting.checkDomain + '\\n';
+                        }
+                    }
+                    alert(errorMsg);
+                }
+            } catch (error) {
                 alert(\`❌ Erro ao testar email: \${error.message}\`);
             } finally {
                 link.textContent = originalText;
@@ -3638,11 +3677,34 @@ router.get('/admin/test-email', async (request: Request, env: Env, ctx: Executio
       headers: { 'Content-Type': 'application/json' }
     });
   } catch (error) {
-    logger.error('Erro ao enviar email de teste', { error: String(error) });
+    const errorMessage = String(error);
+    logger.error('Erro ao enviar email de teste', { error: errorMessage });
+    
+    // Mensagem mais amigável baseada no tipo de erro
+    let userMessage = 'Erro ao enviar email de teste.';
+    let helpText = '';
+    
+    if (errorMessage.includes('401') || errorMessage.includes('autenticação')) {
+      userMessage = 'Erro de autenticação: O Mailchannels requer configuração DNS (SPF).';
+      helpText = 'Para usar o Mailchannels com Cloudflare Workers, você precisa configurar SPF no DNS do domínio do EMAIL_FROM. Se estiver usando um domínio workers.dev, considere usar um domínio customizado com SPF configurado.';
+    } else if (errorMessage.includes('403')) {
+      userMessage = 'Erro de permissão: O domínio não está autorizado.';
+      helpText = 'Verifique se o domínio do EMAIL_FROM tem SPF e DKIM configurados corretamente apontando para o Mailchannels.';
+    } else if (errorMessage.includes('400')) {
+      userMessage = 'Erro de validação: Verifique os dados do email.';
+      helpText = 'Certifique-se de que EMAIL_FROM e EMAIL_TO estão configurados corretamente e são emails válidos.';
+    }
+    
     return new Response(JSON.stringify({ 
       success: false,
-      error: String(error),
-      message: 'Erro ao enviar email de teste. Verifique os logs para mais detalhes.'
+      error: errorMessage,
+      message: userMessage,
+      help: helpText,
+      troubleshooting: {
+        checkEmailConfig: 'Verifique se EMAIL_FROM e EMAIL_TO estão configurados nas variáveis de ambiente do Cloudflare Workers',
+        checkSPF: 'Se usar domínio customizado, configure SPF: v=spf1 include:relay.mailchannels.net ~all',
+        checkDomain: 'O domínio do EMAIL_FROM precisa estar autorizado no Mailchannels via DNS'
+      }
     }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
