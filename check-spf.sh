@@ -41,3 +41,4 @@ echo ""
 echo "💡 Dica: Se você configurou SPF em um subdomínio (ex: go.tomina.ga),"
 echo "   execute: ./check-spf.sh go.tomina.ga"
 
+

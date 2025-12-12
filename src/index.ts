@@ -1101,29 +1101,35 @@ async function processRSSFeed(env: Env): Promise<{ processed: number; saved: num
   };
 
   try {
-    // Verifica URL específica primeiro
-    const specificUrl = 'https://portal.shalom.tec.br/comunicado-acerca-dos-discernimentos-de-dezembro-de-2025';
-    try {
-      const specificResult = await checkSpecificUrl(specificUrl, env, config);
-      if (specificResult.success) {
-        stats.saved++;
-        logger.info('URL específica verificada com sucesso', { 
-          url: specificUrl, 
-          isNew: specificResult.isNew 
-        });
-      } else {
+    // Verifica URLs específicas primeiro
+    const specificUrls = [
+      'https://portal.shalom.tec.br/comunicado-acerca-dos-discernimentos-de-dezembro-de-2025',
+      'https://portal.shalom.tec.br/2025-dezembro-discernimentos'
+    ];
+    
+    for (const specificUrl of specificUrls) {
+      try {
+        const specificResult = await checkSpecificUrl(specificUrl, env, config);
+        if (specificResult.success) {
+          stats.saved++;
+          logger.info('URL específica verificada com sucesso', { 
+            url: specificUrl, 
+            isNew: specificResult.isNew 
+          });
+        } else {
+          stats.errors++;
+          logger.warn('URL específica falhou', { 
+            url: specificUrl, 
+            error: specificResult.error 
+          });
+        }
+      } catch (error) {
         stats.errors++;
-        logger.warn('URL específica falhou', { 
+        logger.error('Erro ao verificar URL específica', { 
           url: specificUrl, 
-          error: specificResult.error 
+          error: String(error) 
         });
       }
-    } catch (error) {
-      stats.errors++;
-      logger.error('Erro ao verificar URL específica', { 
-        url: specificUrl, 
-        error: String(error) 
-      });
     }
     
     logger.info('Iniciando processamento RSS', { 
