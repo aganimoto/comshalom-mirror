@@ -986,101 +986,159 @@ async function processItem(
 }
 
 // Verifica se o conteúdo de uma URL é válido (não é página de erro)
-async function isValidContent(html: string): Promise<boolean> {
+// Validação mais robusta e permissiva para evitar falsos negativos
+async function isValidContent(html: string, url?: string): Promise<{ valid: boolean; reason?: string; details?: any }> {
+  const result: { valid: boolean; reason?: string; details?: any } = {
+    valid: false,
+    details: {}
+  };
+  
   if (!html || html.trim().length === 0) {
-    logger.warn('isValidContent: HTML vazio ou nulo');
-    return false;
+    result.reason = 'HTML vazio ou nulo';
+    logger.warn('isValidContent: HTML vazio ou nulo', { url });
+    return result;
   }
   
   const lowerHtml = html.toLowerCase();
   
-  // Extrai texto do HTML (remove tags)
-  const textContent = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  // Extrai texto do HTML (remove tags e normaliza espaços)
+  const textContent = html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '') // Remove scripts
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '') // Remove estilos
+    .replace(/<[^>]*>/g, ' ') // Remove tags HTML
+    .replace(/\s+/g, ' ') // Normaliza espaços
+    .trim();
+  
   const textLength = textContent.length;
+  result.details = { htmlLength: html.length, textLength };
   
   logger.info('isValidContent: Verificando conteúdo', { 
+    url,
     htmlLength: html.length, 
     textLength,
-    preview: textContent.substring(0, 100) 
+    preview: textContent.substring(0, 150) 
   });
   
-  // Verifica se tem conteúdo mínimo (pelo menos 100 caracteres de texto)
-  // Reduzido de 200 para 100 para ser mais flexível
-  if (textLength < 100) {
-    logger.warn('isValidContent: Conteúdo muito curto', { textLength });
-    return false;
+  // CRITÉRIO 1: Tamanho mínimo muito reduzido (50 caracteres)
+  // Se tem menos de 50 caracteres, provavelmente é vazio
+  if (textLength < 50) {
+    result.reason = `Conteúdo muito curto (${textLength} caracteres)`;
+    logger.warn('isValidContent: Conteúdo muito curto', { textLength, url });
+    return result;
   }
   
-  // Lista de indicadores de página de erro (mais específicos)
-  // Verifica se o indicador aparece em contexto de erro (título, heading, ou mensagem de erro)
-  const errorPatterns = [
-    /<title[^>]*>.*(?:página não foi encontrada|página não encontrada|page not found|404|erro 404|não encontrado|not found|página indisponível|página não disponível|conteúdo não disponível|erro ao carregar|não foi possível encontrar|esta página não existe).*<\/title>/i,
-    /<h[1-6][^>]*>.*(?:página não foi encontrada|página não encontrada|page not found|404|erro 404|não encontrado|not found|página indisponível|página não disponível|conteúdo não disponível|erro ao carregar|não foi possível encontrar|esta página não existe).*<\/h[1-6]>/i,
-    /(?:página não foi encontrada|página não encontrada|page not found|erro 404|não encontrado|not found|página indisponível|página não disponível|conteúdo não disponível|erro ao carregar|não foi possível encontrar|esta página não existe)/i
+  // CRITÉRIO 2: Verifica se é claramente uma página de erro
+  // Só rejeita se for OBVIAMENTE uma página de erro (título ou heading principal)
+  const strongErrorPatterns = [
+    /<title[^>]*>\s*(?:página\s+não\s+foi\s+encontrada|página\s+não\s+encontrada|page\s+not\s+found|404|erro\s+404)\s*<\/title>/i,
+    /<h1[^>]*>\s*(?:página\s+não\s+foi\s+encontrada|página\s+não\s+encontrada|page\s+not\s+found|404|erro\s+404)\s*<\/h1>/i
   ];
   
-  // Verifica se algum padrão de erro está presente
-  for (const pattern of errorPatterns) {
+  let isStrongError = false;
+  for (const pattern of strongErrorPatterns) {
     if (pattern.test(html)) {
-      logger.warn('isValidContent: Padrão de erro detectado', { 
-        pattern: pattern.toString(),
-        textLength 
-      });
-      // Mas não rejeita imediatamente - verifica se há conteúdo suficiente além do erro
-      // Se o texto tem mais de 500 caracteres, provavelmente não é só uma página de erro
-      if (textLength < 500) {
-        return false;
+      // Se o título/heading principal é de erro E o conteúdo é muito curto, rejeita
+      if (textLength < 200) {
+        result.reason = 'Página de erro detectada no título/heading principal';
+        logger.warn('isValidContent: Página de erro detectada', { textLength, url });
+        return result;
       }
-      // Se tem mais de 500 caracteres, pode ser uma página com conteúdo mas que menciona erro
-      // Verifica se tem elementos de conteúdo real
+      isStrongError = true;
       break;
     }
   }
   
-  // Verifica se tem elementos de conteúdo real (títulos, parágrafos, listas)
-  const hasContentElements = /<h[1-6][^>]*>|<p[^>]*>|<article[^>]*>|<section[^>]*>|<div[^>]*class[^>]*content|<main[^>]*>/i.test(html);
+  // CRITÉRIO 3: Verifica elementos de conteúdo HTML
+  const contentElements = {
+    hasHeadings: /<h[1-6][^>]*>/i.test(html),
+    hasParagraphs: /<p[^>]*>/i.test(html),
+    hasArticles: /<article[^>]*>/i.test(html),
+    hasSections: /<section[^>]*>/i.test(html),
+    hasMain: /<main[^>]*>/i.test(html),
+    hasContentDiv: /<div[^>]*class[^>]*content|<div[^>]*id[^>]*content/i.test(html),
+    hasLists: /<[uo]l[^>]*>|<li[^>]*>/i.test(html)
+  };
   
-  if (!hasContentElements && textLength < 300) {
-    logger.warn('isValidContent: Sem elementos de conteúdo e texto muito curto', { 
-      textLength,
-      hasContentElements 
-    });
-    return false;
-  }
+  const hasContentElements = Object.values(contentElements).some(v => v);
+  result.details.contentElements = contentElements;
   
-  // Verifica se tem palavras-chave que indicam conteúdo real (não apenas erro)
-  const contentKeywords = ['comunicado', 'discernimento', 'comissão', 'nomeação', 'transferência', 'fundação', 'missão'];
-  const hasContentKeywords = contentKeywords.some(keyword => lowerHtml.includes(keyword));
+  // CRITÉRIO 4: Verifica palavras-chave de conteúdo (muito mais amplo)
+  const contentKeywords = [
+    'comunicado', 'discernimento', 'comissão', 'nomeação', 'transferência', 
+    'fundação', 'missão', 'comunidade', 'shalom', 'católica', 'deus',
+    'missionário', 'responsável', 'local', 'diaconia', 'assistência',
+    'formação', 'apostólica', 'comunitária', 'regional', 'secretaria'
+  ];
   
+  const foundKeywords = contentKeywords.filter(keyword => lowerHtml.includes(keyword));
+  const hasContentKeywords = foundKeywords.length > 0;
+  result.details.keywords = { found: foundKeywords, count: foundKeywords.length };
+  
+  // DECISÃO: Aceita se atender QUALQUER um dos critérios abaixo
+  
+  // 1. Tem palavras-chave de conteúdo → ACEITA (mesmo que pequeno)
   if (hasContentKeywords) {
-    logger.info('isValidContent: Palavras-chave de conteúdo encontradas', { 
+    result.valid = true;
+    result.reason = `Palavras-chave de conteúdo encontradas (${foundKeywords.length}): ${foundKeywords.slice(0, 3).join(', ')}`;
+    logger.info('isValidContent: ACEITO por palavras-chave', { 
       textLength,
-      hasContentKeywords 
+      keywords: foundKeywords.slice(0, 5),
+      url 
     });
-    return true;
+    return result;
   }
   
-  // Se tem bastante conteúdo (mais de 500 caracteres) e elementos HTML, provavelmente é válido
-  if (textLength >= 500 && hasContentElements) {
-    logger.info('isValidContent: Conteúdo suficiente e elementos HTML presentes', { 
+  // 2. Tem mais de 200 caracteres E elementos HTML → ACEITA
+  if (textLength >= 200 && hasContentElements) {
+    result.valid = true;
+    result.reason = `Conteúdo suficiente (${textLength} chars) com elementos HTML`;
+    logger.info('isValidContent: ACEITO por tamanho e elementos', { 
       textLength,
-      hasContentElements 
+      contentElements,
+      url 
     });
-    return true;
+    return result;
   }
   
-  // Se tem mais de 300 caracteres, aceita (pode ser conteúdo válido)
-  if (textLength >= 300) {
-    logger.info('isValidContent: Conteúdo aceito por tamanho', { textLength });
-    return true;
+  // 3. Tem mais de 500 caracteres → ACEITA (mesmo sem elementos específicos)
+  if (textLength >= 500) {
+    result.valid = true;
+    result.reason = `Conteúdo extenso (${textLength} caracteres)`;
+    logger.info('isValidContent: ACEITO por tamanho extenso', { textLength, url });
+    return result;
   }
   
-  logger.warn('isValidContent: Conteúdo rejeitado', { 
+  // 4. Tem mais de 150 caracteres E não é erro forte → ACEITA (mais permissivo)
+  if (textLength >= 150 && !isStrongError) {
+    result.valid = true;
+    result.reason = `Conteúdo moderado (${textLength} caracteres) sem erro forte`;
+    logger.info('isValidContent: ACEITO por tamanho moderado', { textLength, url });
+    return result;
+  }
+  
+  // 5. Tem elementos HTML E mais de 100 caracteres → ACEITA
+  if (hasContentElements && textLength >= 100) {
+    result.valid = true;
+    result.reason = `Elementos HTML presentes com ${textLength} caracteres`;
+    logger.info('isValidContent: ACEITO por elementos HTML', { 
+      textLength,
+      contentElements,
+      url 
+    });
+    return result;
+  }
+  
+  // REJEITA apenas se for claramente inválido
+  result.reason = `Conteúdo insuficiente: ${textLength} chars, sem keywords, sem elementos HTML suficientes`;
+  logger.warn('isValidContent: REJEITADO', { 
     textLength,
     hasContentElements,
-    hasContentKeywords 
+    hasContentKeywords,
+    isStrongError,
+    details: result.details,
+    url 
   });
-  return false;
+  return result;
 }
 
 // Extrai título do HTML
@@ -1146,13 +1204,49 @@ async function checkSpecificUrl(
     const html = await fetchFullHTML(url, 2);
     logger.info('HTML obtido', { url, htmlLength: html.length });
     
-    // Valida se o conteúdo é válido
-    const isValid = await isValidContent(html);
-    logger.info('Validação de conteúdo', { url, isValid, htmlLength: html.length });
+    // Valida se o conteúdo é válido (com validação melhorada)
+    const validationResult = await isValidContent(html, url);
+    logger.info('Validação de conteúdo', { 
+      url, 
+      valid: validationResult.valid, 
+      reason: validationResult.reason,
+      details: validationResult.details,
+      htmlLength: html.length 
+    });
     
-    if (!isValid) {
-      logger.warn('URL específica retornou conteúdo inválido', { url, htmlLength: html.length });
-      return { success: false, error: 'Conteúdo inválido (página de erro ou vazia)' };
+    if (!validationResult.valid) {
+      // Se a validação falhou, tenta uma validação alternativa mais permissiva
+      // para URLs específicas (elas são confiáveis)
+      const textContent = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      const textLength = textContent.length;
+      
+      logger.info('Tentando validação alternativa para URL específica', { 
+        url, 
+        textLength,
+        htmlLength: html.length 
+      });
+      
+      // Para URLs específicas, aceita se tiver mais de 50 caracteres
+      // (são URLs confiáveis que adicionamos manualmente)
+      if (textLength < 50) {
+        logger.error('URL específica rejeitada: conteúdo muito curto', { 
+          url, 
+          textLength,
+          reason: validationResult.reason,
+          details: validationResult.details
+        });
+        return { 
+          success: false, 
+          error: `Conteúdo inválido: ${validationResult.reason || 'página muito curta ou vazia'}` 
+        };
+      }
+      
+      // Se passou na validação alternativa, continua
+      logger.warn('URL específica aceita pela validação alternativa', { 
+        url, 
+        textLength,
+        originalReason: validationResult.reason 
+      });
     }
     
     // Extrai título do HTML
