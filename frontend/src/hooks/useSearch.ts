@@ -24,3 +24,4 @@ export function useSearch(items: Accessor<Communique[]>) {
   };
 }
 
+

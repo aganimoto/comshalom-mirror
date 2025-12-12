@@ -30,9 +30,12 @@ export interface CommuniquesResponse {
   items: Communique[];
 }
 
-export async function fetchCommuniques(): Promise<CommuniquesResponse> {
+export async function fetchCommuniques(forceRefresh = false): Promise<CommuniquesResponse> {
   try {
-    const response = await fetch(`${WORKER_URL}/admin/list?limit=100`, {
+    // Adiciona parâmetro para forçar atualização sem cache quando necessário
+    // Por padrão, adiciona timestamp para evitar cache muito antigo
+    const cacheParam = forceRefresh ? '&_nocache=true' : `&_t=${Date.now()}`;
+    const response = await fetch(`${WORKER_URL}/admin/list?limit=100${cacheParam}`, {
       headers: {
         'X-ADMIN-KEY': ADMIN_KEY
       },

@@ -845,9 +845,10 @@ router.get('/admin/list', async (request: Request, env: Env, ctx: ExecutionConte
     const limit = Math.min(parseInt(url.searchParams.get('limit') || '50', 10), 100); // Máx 100
     const cursor = url.searchParams.get('cursor') || undefined;
     const search = url.searchParams.get('search')?.toLowerCase();
+    const noCache = url.searchParams.get('_nocache') === 'true' || url.searchParams.get('_refresh') === 'true';
     
-    // Tenta buscar do cache (apenas se não houver search ou cursor)
-    if (!search && !cursor && typeof caches !== 'undefined') {
+    // Tenta buscar do cache (apenas se não houver search, cursor ou se não for forçado a não usar cache)
+    if (!search && !cursor && !noCache && typeof caches !== 'undefined') {
       const cacheKey = createCacheKey(request.url);
       const cached = await getCachedResponse(await caches.open('admin-list'), cacheKey);
       if (cached) {
@@ -914,8 +915,8 @@ router.get('/admin/list', async (request: Request, env: Env, ctx: ExecutionConte
       headers: { 'Content-Type': 'application/json' }
     });
     
-    // Cachea resposta se não houver search ou cursor
-    if (!search && !cursor && typeof caches !== 'undefined') {
+    // Cachea resposta se não houver search, cursor ou se não for forçado a não usar cache
+    if (!search && !cursor && !noCache && typeof caches !== 'undefined') {
       ctx.waitUntil(
         cacheResponse(await caches.open('admin-list'), createCacheKey(request.url), response, 60)
           .catch(err => logger.warn('Erro ao cachear resposta', { error: String(err) }))
