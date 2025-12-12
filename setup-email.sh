@@ -7,14 +7,20 @@ echo "📧 Configuração de Email - Cloudflare Workers"
 echo "=============================================="
 echo ""
 
-# Verifica se wrangler está instalado
-if ! command -v wrangler &> /dev/null; then
+# Verifica se wrangler está disponível (local ou global)
+WRANGLER_CMD=""
+if command -v wrangler &> /dev/null; then
+    WRANGLER_CMD="wrangler"
+    echo "✅ Wrangler encontrado (global)"
+elif npx wrangler --version &> /dev/null; then
+    WRANGLER_CMD="npx wrangler"
+    echo "✅ Wrangler encontrado (local via npx)"
+else
     echo "❌ Wrangler não encontrado!"
-    echo "   Instale com: npm install -g wrangler"
+    echo "   Instale com: npm install"
     exit 1
 fi
 
-echo "✅ Wrangler encontrado"
 echo ""
 
 # Configurar EMAIL_FROM
@@ -27,7 +33,7 @@ if [ -z "$email_from" ]; then
 fi
 
 echo "   Configurando: EMAIL_FROM = $email_from"
-wrangler secret put EMAIL_FROM <<< "$email_from"
+$WRANGLER_CMD secret put EMAIL_FROM <<< "$email_from"
 
 if [ $? -eq 0 ]; then
     echo "   ✅ EMAIL_FROM configurado com sucesso!"
@@ -50,7 +56,7 @@ if [ -z "$email_to" ]; then
 fi
 
 echo "   Configurando: EMAIL_TO = $email_to"
-wrangler secret put EMAIL_TO <<< "$email_to"
+$WRANGLER_CMD secret put EMAIL_TO <<< "$email_to"
 
 if [ $? -eq 0 ]; then
     echo "   ✅ EMAIL_TO configurado com sucesso!"
@@ -67,7 +73,7 @@ read -p "   Digite o EMAIL_REPLY_TO (ou Enter para pular): " email_reply_to
 
 if [ -n "$email_reply_to" ]; then
     echo "   Configurando: EMAIL_REPLY_TO = $email_reply_to"
-    wrangler secret put EMAIL_REPLY_TO <<< "$email_reply_to"
+    $WRANGLER_CMD secret put EMAIL_REPLY_TO <<< "$email_reply_to"
     
     if [ $? -eq 0 ]; then
         echo "   ✅ EMAIL_REPLY_TO configurado com sucesso!"

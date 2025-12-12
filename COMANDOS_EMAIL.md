@@ -24,7 +24,7 @@ O script vai perguntar:
 #### 1. Configurar EMAIL_FROM
 
 ```bash
-wrangler secret put EMAIL_FROM
+npx wrangler secret put EMAIL_FROM
 ```
 
 Quando solicitado, digite:
@@ -34,7 +34,7 @@ noreply@go.tomina.ga
 
 **Ou em uma linha:**
 ```bash
-echo "noreply@go.tomina.ga" | wrangler secret put EMAIL_FROM
+echo "noreply@go.tomina.ga" | npx wrangler secret put EMAIL_FROM
 ```
 
 ---
@@ -42,7 +42,7 @@ echo "noreply@go.tomina.ga" | wrangler secret put EMAIL_FROM
 #### 2. Configurar EMAIL_TO
 
 ```bash
-wrangler secret put EMAIL_TO
+npx wrangler secret put EMAIL_TO
 ```
 
 Quando solicitado, digite seu email:
@@ -52,7 +52,7 @@ seu-email@gmail.com
 
 **Para múltiplos emails (separados por vírgula):**
 ```bash
-echo "email1@gmail.com,email2@outlook.com" | wrangler secret put EMAIL_TO
+echo "email1@gmail.com,email2@outlook.com" | npx wrangler secret put EMAIL_TO
 ```
 
 ---
@@ -60,7 +60,7 @@ echo "email1@gmail.com,email2@outlook.com" | wrangler secret put EMAIL_TO
 #### 3. (Opcional) Configurar EMAIL_REPLY_TO
 
 ```bash
-wrangler secret put EMAIL_REPLY_TO
+npx wrangler secret put EMAIL_REPLY_TO
 ```
 
 Quando solicitado, digite:
@@ -70,7 +70,7 @@ contato@tomina.ga
 
 **Ou em uma linha:**
 ```bash
-echo "contato@tomina.ga" | wrangler secret put EMAIL_REPLY_TO
+echo "contato@tomina.ga" | npx wrangler secret put EMAIL_REPLY_TO
 ```
 
 ---
@@ -80,7 +80,7 @@ echo "contato@tomina.ga" | wrangler secret put EMAIL_REPLY_TO
 ### Listar todas as variáveis secretas:
 
 ```bash
-wrangler secret list
+npx wrangler secret list
 ```
 
 Isso mostra todas as variáveis configuradas (mas não os valores, por segurança).
@@ -91,9 +91,9 @@ Isso mostra todas as variáveis configuradas (mas não os valores, por seguranç
 
 ```bash
 # Configurar tudo de uma vez
-echo "noreply@go.tomina.ga" | wrangler secret put EMAIL_FROM
-echo "seu-email@gmail.com" | wrangler secret put EMAIL_TO
-echo "contato@tomina.ga" | wrangler secret put EMAIL_REPLY_TO
+echo "noreply@go.tomina.ga" | npx wrangler secret put EMAIL_FROM
+echo "seu-email@gmail.com" | npx wrangler secret put EMAIL_TO
+echo "contato@tomina.ga" | npx wrangler secret put EMAIL_REPLY_TO
 ```
 
 ---
@@ -102,13 +102,13 @@ echo "contato@tomina.ga" | wrangler secret put EMAIL_REPLY_TO
 
 ```bash
 # Remover EMAIL_FROM
-wrangler secret delete EMAIL_FROM
+npx wrangler secret delete EMAIL_FROM
 
 # Remover EMAIL_TO
-wrangler secret delete EMAIL_TO
+npx wrangler secret delete EMAIL_TO
 
 # Remover EMAIL_REPLY_TO
-wrangler secret delete EMAIL_REPLY_TO
+npx wrangler secret delete EMAIL_REPLY_TO
 ```
 
 ---
@@ -120,7 +120,7 @@ wrangler secret delete EMAIL_REPLY_TO
 Você precisa fazer login no Wrangler:
 
 ```bash
-wrangler login
+npx wrangler login
 ```
 
 Isso abrirá o navegador para autenticação.
@@ -148,14 +148,14 @@ Após configurar, teste:
 
 ```bash
 # Login (se necessário)
-wrangler login
+npx wrangler login
 
 # Configurar emails
-echo "noreply@go.tomina.ga" | wrangler secret put EMAIL_FROM
-echo "seu-email@gmail.com" | wrangler secret put EMAIL_TO
+echo "noreply@go.tomina.ga" | npx wrangler secret put EMAIL_FROM
+echo "seu-email@gmail.com" | npx wrangler secret put EMAIL_TO
 
 # Verificar
-wrangler secret list
+npx wrangler secret list
 
 # Testar
 # Acesse o painel admin e clique em "Testar Email"
