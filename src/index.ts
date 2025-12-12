@@ -1649,15 +1649,13 @@ function addCorsHeaders(response: Response, origin?: string | null): Response {
     'http://127.0.0.1:3000'
   ];
   
-  // Verifica se o origin está na lista de permitidos
+  // Sempre define o header CORS - essencial para requisições cross-origin
   if (origin && allowedOrigins.includes(origin)) {
+    // Usa a origem específica se estiver na lista (melhor prática)
     headers.set('Access-Control-Allow-Origin', origin);
-  } else if (!origin || origin === 'null') {
-    // Se não houver origin (requisição direta) ou for null, permite qualquer origem
-    headers.set('Access-Control-Allow-Origin', '*');
   } else {
-    // Para outras origens, ainda adiciona o header para evitar erros
-    // mas apenas para requisições que não sejam de navegadores (sem origin header)
+    // Usa '*' para outras origens (incluindo quando origin é null)
+    // Nota: '*' não funciona com credenciais, mas neste caso não usamos credenciais
     headers.set('Access-Control-Allow-Origin', '*');
   }
   
