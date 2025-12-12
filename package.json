@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "tail": "wrangler tail"
+    "tail": "wrangler tail",
+    "frontend:dev": "cd frontend && bun run dev",
+    "frontend:build": "cd frontend && bun run build && cp ../public/index.html ../index.html && mkdir -p ../assets && cp -r ../public/assets/* ../assets/ 2>/dev/null || true && cp ../public/*.{jpg,png} .. 2>/dev/null || true",
+    "frontend:install": "cd frontend && bun install"
   },
   "keywords": [
     "cloudflare-workers",

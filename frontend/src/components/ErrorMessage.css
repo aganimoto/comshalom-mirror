@@ -1,0 +1,80 @@
+.error-message {
+  background: #fff5f5;
+  border: 1px solid #ffcccc;
+  border-radius: var(--radius-md);
+  padding: var(--spacing-lg);
+  margin-top: var(--spacing-lg);
+  color: #c33;
+  animation: fadeIn 0.3s ease-in;
+}
+
+.error-icon {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto var(--spacing-md);
+  color: #dc2626;
+}
+
+.error-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.error-title {
+  font-weight: 600;
+  margin-bottom: var(--spacing-sm);
+  text-align: center;
+  font-size: 1.1em;
+}
+
+.error-text {
+  font-size: 0.95em;
+  color: #a00;
+  text-align: center;
+  margin-bottom: var(--spacing-md);
+}
+
+.error-help {
+  margin-top: var(--spacing-lg);
+  padding: var(--spacing-md);
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid #dc2626;
+}
+
+.error-help p {
+  margin-bottom: var(--spacing-sm);
+  color: #7f1d1d;
+  font-weight: 500;
+}
+
+.error-help ol {
+  margin-left: var(--spacing-lg);
+  color: #7f1d1d;
+}
+
+.error-help li {
+  margin-bottom: var(--spacing-xs);
+  line-height: 1.6;
+}
+
+.error-help code {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'Courier New', monospace;
+  font-size: 0.9em;
+  color: #991b1b;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+

@@ -6,3 +6,6 @@ dist/
 .env.local
 .DS_Store
 package-lock.json
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/

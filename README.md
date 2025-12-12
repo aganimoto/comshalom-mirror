@@ -4,14 +4,14 @@ Sistema automatizado de monitoramento de feeds RSS desenvolvido com Cloudflare W
 
 ## Visão Geral
 
-Solução serverless 100% gratuita que monitora feeds RSS, detecta comunicados relevantes através de filtros inteligentes, armazena cópias completas do conteúdo HTML, realiza commits automáticos no GitHub e notifica usuários via email e push notifications.
+Solução serverless que monitora feeds RSS, detecta comunicados relevantes através de filtros configuráveis, armazena cópias completas do conteúdo HTML, realiza commits automáticos no GitHub e notifica usuários via email e push notifications.
 
 ## Funcionalidades Principais
 
 ### Monitoramento Automatizado
 - **Cron Trigger**: Execução automática a cada 15 minutos
 - **Múltiplos Feeds**: Suporte a múltiplos feeds RSS configuráveis
-- **Filtragem Inteligente**: Algoritmo de similaridade de texto (Levenshtein Distance)
+- **Filtragem por Similaridade**: Algoritmo de similaridade de texto (Levenshtein Distance)
 - **Filtro Temporal**: Processa apenas posts a partir de data configurável (padrão: setembro 2025)
 
 ### Armazenamento e Persistência
@@ -29,11 +29,11 @@ Solução serverless 100% gratuita que monitora feeds RSS, detecta comunicados r
 - **Interface Web**: Frontend responsivo para visualização de comunicados
 - **API REST**: Endpoints administrativos com autenticação
 - **Paginação**: Suporte a paginação e busca na listagem
-- **Cache**: Cache API para otimização de performance
+- **Cache**: Cache API para otimização de requisições
 
 ### Segurança e Performance
 - **Sanitização HTML**: Remoção de scripts e conteúdo malicioso
-- **Rate Limiting**: Proteção contra abuso de API
+- **Rate Limiting**: Limitação de requisições por IP
 - **CORS**: Headers CORS configurados para acesso do frontend
 - **Otimizações Workers**: Cache, processamento paralelo, validações
 
@@ -638,120 +638,29 @@ Acessar `/admin/stats` para estatísticas do sistema:
 - Headers CORS configurados para origens permitidas
 - Suporte a múltiplos domínios (localhost, produção)
 
-## Fragilidades e Pontos Fracos Conhecidos
-
-### Limitações Técnicas
-
-1. **Rate Limiting em Memória**
-   - O rate limiting atual é baseado em memória e não persiste entre instâncias do Worker
-   - Em alta carga, pode haver inconsistências
-   - **Solução futura**: Implementar rate limiting usando KV Storage
-
-2. **Cache de Branch do GitHub**
-   - Cache em memória pode ficar desatualizado se a branch padrão mudar
-   - TTL de 1 hora pode ser insuficiente em alguns casos
-   - **Mitigação**: Fallback para 'main' se a detecção falhar
-
-3. **Processamento Paralelo Limitado**
-   - Limite de concorrência configurável mas limitado a 10 itens simultâneos
-   - Em feeds muito grandes, pode demorar para processar tudo
-   - **Mitigação**: Processamento em batches com controle de concorrência
-
-4. **Validação de HTML**
-   - Sanitização básica pode não cobrir todos os casos de XSS
-   - HTML muito grande (>10MB) é rejeitado mas pode causar falhas silenciosas
-   - **Recomendação**: Revisar e melhorar a lista de tags/atributos permitidos
-
-5. **Dependência de Serviços Externos**
-   - Falhas no RSS feed, GitHub API ou Mailchannels podem interromper o processamento
-   - Retry implementado mas pode não ser suficiente em casos extremos
-   - **Mitigação**: Logs detalhados e monitoramento
+## Limitações Conhecidas
 
 ### Segurança
 
-1. **Admin Key em Frontend**
-   - A chave de administração está exposta no código do frontend
-   - Qualquer pessoa pode acessar as rotas administrativas
-   - **Recomendação**: Implementar autenticação mais robusta ou restringir acesso por IP
+1. **ADMIN_KEY no Frontend**: A chave de administração está exposta no código do frontend (`index.html`). Recomenda-se implementar autenticação baseada em sessão ou OAuth.
 
-2. **Tokens em Secrets**
-   - Tokens do GitHub armazenados como secrets (correto)
-   - Mas se comprometidos, podem dar acesso total ao repositório
-   - **Recomendação**: Usar tokens com escopo mínimo necessário
+2. **Rate Limiting em Memória**: O rate limiting atual é em memória e não persiste entre reinicializações do Worker. Para produção crítica, recomenda-se usar Cloudflare KV ou Durable Objects.
 
-3. **CORS Permissivo**
-   - CORS configurado para múltiplas origens pode ser explorado
-   - **Mitigação**: Restringir origens permitidas em produção
-
-### Performance
-
-1. **KV Storage Limits**
-   - KV tem limite de 25MB por valor
-   - HTML muito grande pode exceder o limite
-   - **Mitigação**: Validação de tamanho antes de salvar (10MB)
-
-2. **Timeout de Requisições**
-   - Timeouts configurados mas podem não ser suficientes em conexões lentas
-   - **Mitigação**: Retry com backoff exponencial
-
-3. **Processamento Síncrono em Alguns Casos**
-   - Reprocessamento executa sincronamente, pode demorar
-   - **Mitigação**: Usar `ctx.waitUntil` para processamento em background quando possível
+3. **Validação de Tamanho de Requisições**: Requisições muito grandes podem causar problemas. Limites de tamanho devem ser configurados conforme necessário.
 
 ### Confiabilidade
 
-1. **Falta de Monitoramento Avançado**
-   - Apenas logs básicos, sem alertas automáticos
-   - **Recomendação**: Integrar com serviços de monitoramento (ex: Sentry, Datadog)
+1. **Dependência do KV Storage**: Dados são armazenados no Cloudflare KV. Não há backup automático. Recomenda-se implementar sincronização periódica com GitHub.
 
-2. **Sem Backup Automático**
-   - Dados apenas no KV e GitHub
-   - Se ambos falharem, dados podem ser perdidos
-   - **Recomendação**: Implementar backup periódico
+2. **Retry para KV**: Operações de KV não possuem retry automático. Falhas temporárias podem resultar em perda de dados.
 
-3. **Dependência de Cron**
-   - Se o Cron falhar, não há notificação
-   - **Mitigação**: Health check endpoint e monitoramento externo
-
-### Manutenibilidade
-
-1. **Código Monolítico**
-   - Grande parte da lógica em `src/index.ts`
-   - Pode ser difícil manter e testar
-   - **Recomendação**: Modularizar mais o código
-
-2. **Falta de Testes**
-   - Sem testes automatizados
-   - Mudanças podem quebrar funcionalidades existentes
-   - **Recomendação**: Implementar testes unitários e de integração
-
-3. **Documentação de Código**
-   - Algumas funções complexas sem documentação adequada
-   - **Recomendação**: Adicionar JSDoc em funções críticas
-
-## Fragilidades e Limitações Conhecidas
-
-### Segurança
-
-1. **ADMIN_KEY no Frontend**: A chave de administração está exposta no código do frontend (`index.html`). Para maior segurança, considere usar autenticação baseada em sessão ou OAuth.
-
-2. **Rate Limiting em Memória**: O rate limiting atual é em memória e não persiste entre reinicializações do Worker. Para produção crítica, considere usar Cloudflare KV ou Durable Objects.
-
-3. **Sem Validação de Tamanho de Requisições**: Requisições muito grandes podem causar problemas. Considere adicionar limites de tamanho.
-
-### Confiabilidade
-
-1. **Dependência Única do KV**: Todos os dados estão apenas no Cloudflare KV. Não há backup automático. Considere implementar sincronização periódica com GitHub.
-
-2. **Sem Retry para KV**: Operações de KV não têm retry automático. Falhas temporárias podem resultar em perda de dados.
-
-3. **Processamento Sequencial**: Itens são processados em batches, mas falhas em um item podem afetar o processamento do batch inteiro.
+3. **Processamento em Batches**: Itens são processados em batches. Falhas em um item podem afetar o processamento do batch inteiro.
 
 4. **Dependência do GitHub API**: Se a API do GitHub estiver indisponível, os arquivos não são criados, mesmo que o item seja salvo no KV.
 
 ### Performance
 
-1. **Cache Sem TTL Configurável**: O cache tem TTL fixo. Para diferentes tipos de conteúdo, TTLs diferentes seriam mais eficientes.
+1. **Cache com TTL Fixo**: O cache possui TTL fixo. Para diferentes tipos de conteúdo, TTLs diferentes seriam mais eficientes.
 
 2. **HTML Não Comprimido**: HTML é armazenado sem compressão, ocupando mais espaço no KV e GitHub.
 
@@ -759,34 +668,21 @@ Acessar `/admin/stats` para estatísticas do sistema:
 
 ### Manutenibilidade
 
-1. **Schema Não Versionado**: Mudanças no schema do `Communique` podem quebrar itens antigos. Considere versionamento de schema.
+1. **Schema Não Versionado**: Mudanças no schema do `Communique` podem quebrar itens antigos. Recomenda-se implementar versionamento de schema.
 
-2. **Logs Sem Rotação**: Logs podem crescer indefinidamente. Considere implementar rotação ou limpeza periódica.
+2. **Logs Sem Rotação**: Logs podem crescer indefinidamente. Recomenda-se implementar rotação ou limpeza periódica.
 
-3. **Sem Testes Automatizados**: Não há testes unitários ou de integração. Considere adicionar testes para garantir qualidade.
+3. **Sem Testes Automatizados**: Não há testes unitários ou de integração. Recomenda-se adicionar testes para garantir qualidade.
 
 ### Escalabilidade
 
-1. **Limite de KV**: Cloudflare KV tem limites de tamanho (25MB por valor, 100GB por namespace). Para grandes volumes, considere arquitetura distribuída.
+1. **Limite de KV**: Cloudflare KV possui limites de tamanho (25MB por valor, 100GB por namespace). Para grandes volumes, recomenda-se arquitetura distribuída.
 
-2. **Limite de Worker CPU Time**: Workers têm limite de CPU time por requisição. Processamento muito intensivo pode exceder limites.
+2. **Limite de Worker CPU Time**: Workers possuem limite de CPU time por requisição. Processamento muito intensivo pode exceder limites.
 
-3. **Sem Monitoramento Avançado**: Métricas básicas estão disponíveis, mas não há alertas ou dashboards avançados.
+3. **Monitoramento Básico**: Métricas básicas estão disponíveis. Não há alertas ou dashboards avançados.
 
-### Recomendações de Melhoria
-
-1. **Implementar Backup Automático**: Sincronizar dados do KV com GitHub periodicamente
-2. **Adicionar Retry Logic**: Implementar retry com backoff exponencial para todas as operações externas
-3. **Separar Frontend**: Mover frontend para arquivo estático ou CDN separado
-4. **Implementar Testes**: Adicionar testes unitários e de integração
-5. **Monitoramento**: Integrar com serviços de monitoramento (Sentry, Datadog, etc.)
-6. **Compressão**: Implementar compressão de HTML antes de armazenar
-7. **Versionamento de Schema**: Adicionar versionamento para permitir migrações de dados
 
 ## Licença
 
 MIT
-
-## Suporte
-
-Para questões e problemas, abrir issue no repositório GitHub: https://github.com/aganimoto/comshalom-mirror/issues

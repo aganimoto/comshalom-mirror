@@ -1,0 +1,161 @@
+.header {
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  padding: 0;
+  margin-bottom: var(--spacing-lg);
+  box-shadow: 0 2px 8px var(--color-shadow);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+  animation: fadeIn 0.4s ease-in;
+}
+
+.banner-container {
+  width: 100%;
+  height: 200px;
+  overflow: hidden;
+  background: var(--color-bg);
+  position: relative;
+}
+
+.banner-container::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.1), transparent);
+  pointer-events: none;
+}
+
+.banner-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.3s ease;
+}
+
+.banner-container:hover .banner-image {
+  transform: scale(1.02);
+}
+
+.header-content {
+  display: flex;
+  flex-direction: column;
+  padding: var(--spacing-xl);
+}
+
+.logo-container {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+  animation: slideIn 0.5s ease-out;
+}
+
+.logo-image {
+  height: 40px;
+  width: auto;
+  object-fit: contain;
+  transition: transform 0.2s ease;
+}
+
+.logo-image:hover {
+  transform: scale(1.05);
+}
+
+.logo-text {
+  font-size: 1.8em;
+  font-weight: 600;
+  color: var(--color-text);
+  letter-spacing: 0.5px;
+}
+
+.header h1 {
+  font-size: 2.2em;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: var(--spacing-xs);
+  letter-spacing: -0.5px;
+  animation: fadeInUp 0.6s ease-out;
+}
+
+.subtitle {
+  color: var(--color-text-secondary);
+  font-size: 1em;
+  margin-bottom: var(--spacing-lg);
+  animation: fadeInUp 0.7s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 768px) {
+  .banner-container {
+    height: 150px;
+  }
+
+  .header-content {
+    padding: var(--spacing-lg);
+  }
+
+  .logo-image {
+    height: 32px;
+  }
+
+  .logo-text {
+    font-size: 1.5em;
+  }
+
+  .header h1 {
+    font-size: 1.8em;
+  }
+}
+
+@media (max-width: 480px) {
+  .banner-container {
+    height: 120px;
+  }
+
+  .logo-image {
+    height: 28px;
+  }
+
+  .logo-text {
+    font-size: 1.3em;
+  }
+
+  .header h1 {
+    font-size: 1.5em;
+  }
+}
+
