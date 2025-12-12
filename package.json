@@ -1,0 +1,27 @@
+{
+  "name": "comshalom-rss-monitor",
+  "version": "1.0.0",
+  "description": "Monitor RSS do ComShalom com Cloudflare Workers",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "keywords": [
+    "cloudflare-workers",
+    "rss",
+    "github-api",
+    "serverless"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241106.0",
+    "typescript": "^5.3.3",
+    "wrangler": "^4.54.0"
+  },
+  "dependencies": {
+    "itty-router": "^4.0.23"
+  }
+}
