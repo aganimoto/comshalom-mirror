@@ -1368,33 +1368,48 @@ async function processRSSFeed(env: Env): Promise<{ processed: number; saved: num
   };
 
   try {
-    // Verifica URLs específicas primeiro
+    // Verifica URLs específicas em paralelo
     const specificUrls = [
       'https://portal.shalom.tec.br/comunicado-acerca-dos-discernimentos-de-dezembro-de-2025',
       'https://portal.shalom.tec.br/2025-dezembro-discernimentos'
     ];
     
-    for (const specificUrl of specificUrls) {
-      try {
-        const specificResult = await checkSpecificUrl(specificUrl, env, config);
-        if (specificResult.success) {
+    logger.info('Processando URLs específicas em paralelo', { count: specificUrls.length });
+    const specificUrlResults = await Promise.allSettled(
+      specificUrls.map(async (specificUrl) => {
+        try {
+          const specificResult = await checkSpecificUrl(specificUrl, env, config);
+          return { url: specificUrl, result: specificResult };
+        } catch (error) {
+          return { 
+            url: specificUrl, 
+            result: { success: false, error: String(error) } 
+          };
+        }
+      })
+    );
+    
+    // Processa resultados das URLs específicas
+    for (const urlResult of specificUrlResults) {
+      if (urlResult.status === 'fulfilled') {
+        const { url, result } = urlResult.value;
+        if (result.success) {
           stats.saved++;
           logger.info('URL específica verificada com sucesso', { 
-            url: specificUrl, 
-            isNew: specificResult.isNew 
+            url, 
+            isNew: result.isNew 
           });
         } else {
           stats.errors++;
           logger.warn('URL específica falhou', { 
-            url: specificUrl, 
-            error: specificResult.error 
+            url, 
+            error: result.error 
           });
         }
-      } catch (error) {
+      } else {
         stats.errors++;
         logger.error('Erro ao verificar URL específica', { 
-          url: specificUrl, 
-          error: String(error) 
+          error: String(urlResult.reason) 
         });
       }
     }
@@ -1470,37 +1485,55 @@ async function processRSSFeed(env: Env): Promise<{ processed: number; saved: num
       processAll: config.processAll 
     });
 
-    // Processa itens em batches paralelos
-    const batchSize = config.batchSize;
+    // Processa itens em paralelo com controle de concorrência
     const maxConcurrency = config.maxConcurrency;
     
-    for (let i = 0; i < relevantItems.length; i += batchSize) {
-      const batch = relevantItems.slice(i, i + batchSize);
+    logger.info('Iniciando processamento paralelo de itens', { 
+      totalItems: relevantItems.length,
+      maxConcurrency 
+    });
+    
+    // Função para processar com controle de concorrência
+    const processWithConcurrency = async (items: RSSItem[]) => {
+      const results: Promise<{ success: boolean }>[] = [];
+      const activePromises = new Set<Promise<{ success: boolean }>>();
       
-      // Processa batch com limite de concorrência
-      const semaphore: Promise<void>[] = [];
-      for (const item of batch) {
+      for (const item of items) {
         stats.processed++;
         
-        // Limita concorrência
-        if (semaphore.length >= maxConcurrency) {
-          await Promise.race(semaphore);
-        }
-        
+        // Cria promise de processamento
         const promise = processItem(item, env, config).then(result => {
+          activePromises.delete(promise);
           if (result.success) {
             stats.saved++;
           } else {
             stats.errors++;
           }
+          return result;
+        }).catch(error => {
+          activePromises.delete(promise);
+          stats.errors++;
+          logger.error('Erro ao processar item', { 
+            url: item.link, 
+            error: String(error) 
+          });
+          return { success: false };
         });
         
-        semaphore.push(promise);
+        activePromises.add(promise);
+        results.push(promise);
+        
+        // Limita concorrência: aguarda uma promise completar se atingiu o limite
+        if (activePromises.size >= maxConcurrency) {
+          await Promise.race(activePromises);
+        }
       }
       
-      // Aguarda batch completo
-      await Promise.all(semaphore);
-    }
+      // Aguarda todas as promises restantes
+      await Promise.allSettled(results);
+    };
+    
+    await processWithConcurrency(relevantItems);
 
     const duration = Date.now() - startTime;
     logger.info('Processamento concluído', { 
@@ -4176,39 +4209,55 @@ router.get('/admin/process-specific-urls', async (request: Request, env: Env, ct
     ];
     
     const config = loadConfig(env);
-    const results = [];
     
-    for (const url of specificUrls) {
-      try {
-        // Remove do KV para forçar reprocessamento
-        const urlHash = await crypto.subtle.digest(
-          'SHA-256',
-          new TextEncoder().encode(url)
-        );
-        const hashArray = Array.from(new Uint8Array(urlHash));
-        const id = hashArray
-          .map(b => b.toString(16).padStart(2, '0'))
-          .join('')
-          .substring(0, 32);
-        
-        await env.COMMUNIQUE_STORE.delete(id);
-        logger.info('Item removido para forçar reprocessamento', { id, url });
-        
-        const result = await checkSpecificUrl(url, env, config);
-        results.push({
-          url,
-          success: result.success,
-          isNew: result.isNew,
-          error: result.error
-        });
-      } catch (error) {
-        results.push({
-          url,
+    // Processa URLs em paralelo
+    logger.info('Processando URLs específicas em paralelo', { count: specificUrls.length });
+    const urlResults = await Promise.allSettled(
+      specificUrls.map(async (url) => {
+        try {
+          // Remove do KV para forçar reprocessamento
+          const urlHash = await crypto.subtle.digest(
+            'SHA-256',
+            new TextEncoder().encode(url)
+          );
+          const hashArray = Array.from(new Uint8Array(urlHash));
+          const id = hashArray
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('')
+            .substring(0, 32);
+          
+          await env.COMMUNIQUE_STORE.delete(id);
+          logger.info('Item removido para forçar reprocessamento', { id, url });
+          
+          const result = await checkSpecificUrl(url, env, config);
+          return {
+            url,
+            success: result.success,
+            isNew: result.isNew,
+            error: result.error
+          };
+        } catch (error) {
+          return {
+            url,
+            success: false,
+            error: String(error)
+          };
+        }
+      })
+    );
+    
+    // Processa resultados
+    const results = urlResults.map((result, index) => {
+      if (result.status === 'fulfilled') {
+        return result.value;
+      } else {
+        return {
+          url: specificUrls[index],
           success: false,
-          error: String(error)
-        });
+          error: String(result.reason)
+        };
       }
-    }
+    });
     
     return new Response(JSON.stringify({ 
       success: true,
