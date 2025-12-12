@@ -2510,6 +2510,11 @@ router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) =
                     <p style="margin-top: 8px; font-size: 0.9em; color: #86868b;">Recriar todas as páginas</p>
                     <a href="/admin/recreate-all" target="_blank">Executar →</a>
                 </div>
+                <div class="action-card">
+                    <strong>📧 Testar Email</strong>
+                    <p style="margin-top: 8px; font-size: 0.9em; color: #86868b;">Enviar email de teste</p>
+                    <a href="/admin/test-email" target="_blank" id="testEmailLink" onclick="testEmail(event); return false;" style="cursor: pointer;">Enviar Teste →</a>
+                </div>
             </div>
         </div>
     </div>
@@ -2592,6 +2597,33 @@ router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) =
             if (confirm('Deseja realmente sair?')) {
                 await fetch('/admin/logout', { method: 'POST' });
                 window.location.href = '/admin/login';
+            }
+        }
+        
+        async function testEmail(event) {
+            event.preventDefault();
+            const link = document.getElementById('testEmailLink');
+            const originalText = link.textContent;
+            
+            link.textContent = 'Enviando...';
+            link.style.pointerEvents = 'none';
+            link.style.opacity = '0.6';
+            
+            try {
+                const response = await fetch('/admin/test-email');
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert(\`✅ Email de teste enviado com sucesso!\\n\\nDestinatários: \${data.recipients}\\nTítulo: \${data.communique.title}\`);
+                } else {
+                    alert(\`❌ Erro ao enviar email: \${data.error || data.message}\`);
+    }
+  } catch (error) {
+                alert(\`❌ Erro ao testar email: \${error.message}\`);
+            } finally {
+                link.textContent = originalText;
+                link.style.pointerEvents = 'auto';
+                link.style.opacity = '1';
             }
         }
         
@@ -3542,6 +3574,76 @@ router.get('/admin/stats', async (request: Request, env: Env, ctx: ExecutionCont
     });
   } catch (error) {
     return new Response(JSON.stringify({ error: String(error) }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+});
+
+// Rota admin: teste de email
+router.get('/admin/test-email', async (request: Request, env: Env, ctx: ExecutionContext) => {
+  const authCheck = await requireAdmin(env, request);
+  if (authCheck) return authCheck;
+
+  try {
+    // Verifica se email está configurado
+    if (!env.EMAIL_FROM || !env.EMAIL_TO) {
+      return new Response(JSON.stringify({ 
+        success: false,
+        error: 'Email não configurado. Configure EMAIL_FROM e EMAIL_TO nas variáveis de ambiente.'
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    // Cria um comunicado de teste
+    const testCommunique: Communique = {
+      id: 'test-' + Date.now(),
+      uuid: crypto.randomUUID(),
+      title: '🧪 Teste de Email - ComShalom RSS Monitor',
+      url: 'https://comshalom.org/test',
+      timestamp: new Date().toISOString(),
+      html: `
+        <h1>Este é um email de teste</h1>
+        <p>Este é um comunicado de teste para verificar se o sistema de email está funcionando corretamente.</p>
+        <p>Se você recebeu este email, significa que:</p>
+        <ul>
+          <li>✅ O sistema de email está configurado corretamente</li>
+          <li>✅ O template HTML está sendo gerado</li>
+          <li>✅ O Mailchannels está funcionando</li>
+          <li>✅ As notificações estão sendo enviadas</li>
+        </ul>
+        <p><strong>Data do teste:</strong> ${new Date().toLocaleString('pt-BR')}</p>
+        <p><em>Este é apenas um email de teste e pode ser ignorado.</em></p>
+      `,
+      githubSha: 'test123',
+      githubUrl: 'https://github.com/test',
+      publicUrl: 'https://go.tomina.ga/pages/test.html'
+    };
+
+    // Envia o email de teste
+    await sendEmail(env, testCommunique, testCommunique.publicUrl);
+
+    return new Response(JSON.stringify({ 
+      success: true,
+      message: 'Email de teste enviado com sucesso!',
+      communique: {
+        id: testCommunique.id,
+        title: testCommunique.title,
+        timestamp: testCommunique.timestamp
+      },
+      recipients: env.EMAIL_TO.split(',').map(e => e.trim()).length
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    logger.error('Erro ao enviar email de teste', { error: String(error) });
+    return new Response(JSON.stringify({ 
+      success: false,
+      error: String(error),
+      message: 'Erro ao enviar email de teste. Verifique os logs para mais detalhes.'
+    }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     });
