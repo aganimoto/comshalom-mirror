@@ -630,6 +630,110 @@ async function processItem(
   }
 }
 
+// Verifica se o conteúdo de uma URL é válido (não é página de erro)
+async function isValidContent(html: string): Promise<boolean> {
+  if (!html || html.trim().length === 0) {
+    return false;
+  }
+  
+  const lowerHtml = html.toLowerCase();
+  
+  // Lista de indicadores de página de erro
+  const errorIndicators = [
+    'página não foi encontrada',
+    'página não encontrada',
+    'page not found',
+    '404',
+    'erro 404',
+    'não encontrado',
+    'not found',
+    'página indisponível',
+    'página não disponível',
+    'conteúdo não disponível',
+    'erro ao carregar',
+    'não foi possível encontrar',
+    'esta página não existe'
+  ];
+  
+  // Verifica se contém algum indicador de erro
+  for (const indicator of errorIndicators) {
+    if (lowerHtml.includes(indicator)) {
+      return false;
+    }
+  }
+  
+  // Verifica se tem conteúdo mínimo (pelo menos 200 caracteres de texto)
+  const textContent = html.replace(/<[^>]*>/g, '').trim();
+  if (textContent.length < 200) {
+    return false;
+  }
+  
+  return true;
+}
+
+// Verifica URL específica de comunicado
+async function checkSpecificUrl(
+  url: string,
+  env: Env,
+  config: ReturnType<typeof loadConfig>
+): Promise<{ success: boolean; error?: string; isNew?: boolean }> {
+  try {
+    logger.info('Verificando URL específica', { url });
+    
+    // Gera ID único baseado na URL
+    const urlHash = await crypto.subtle.digest(
+      'SHA-256',
+      new TextEncoder().encode(url)
+    );
+    const hashArray = Array.from(new Uint8Array(urlHash));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    const id = `specific-${hashHex.substring(0, 16)}`;
+    
+    // Busca o HTML
+    const html = await fetchFullHTML(url, 2);
+    
+    // Valida se o conteúdo é válido
+    if (!(await isValidContent(html))) {
+      logger.warn('URL específica retornou conteúdo inválido', { url });
+      return { success: false, error: 'Conteúdo inválido (página de erro ou vazia)' };
+    }
+    
+    // Verifica se já existe no KV
+    const existing = await env.COMMUNIQUE_STORE.get(id);
+    if (existing) {
+      const existingItem = JSON.parse(existing) as Communique;
+      logger.info('URL específica já existe no sistema', { id, url });
+      
+      // Atualiza se o conteúdo mudou
+      if (html !== existingItem.html) {
+        logger.info('Conteúdo da URL específica mudou, atualizando', { id, url });
+        const result = await processItem({
+          title: existingItem.title || 'Comunicado acerca dos discernimentos de dezembro de 2025',
+          link: url,
+          pubDate: existingItem.timestamp || new Date().toISOString(),
+          description: ''
+        }, env, config);
+        return { ...result, isNew: false };
+      }
+      return { success: true, isNew: false };
+    }
+    
+    // Processa como um novo item
+    const result = await processItem({
+      title: 'Comunicado acerca dos discernimentos de dezembro de 2025',
+      link: url,
+      pubDate: new Date().toISOString(),
+      description: ''
+    }, env, config);
+    
+    return { ...result, isNew: true };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.error('Erro ao verificar URL específica', { url, error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
+}
+
 // Função principal do Cron
 async function processRSSFeed(env: Env): Promise<{ processed: number; saved: number; errors: number }> {
   const startTime = Date.now();
@@ -642,6 +746,31 @@ async function processRSSFeed(env: Env): Promise<{ processed: number; saved: num
   };
 
   try {
+    // Verifica URL específica primeiro
+    const specificUrl = 'https://portal.shalom.tec.br/comunicado-acerca-dos-discernimentos-de-dezembro-de-2025';
+    try {
+      const specificResult = await checkSpecificUrl(specificUrl, env, config);
+      if (specificResult.success) {
+        stats.saved++;
+        logger.info('URL específica verificada com sucesso', { 
+          url: specificUrl, 
+          isNew: specificResult.isNew 
+        });
+      } else {
+        stats.errors++;
+        logger.warn('URL específica falhou', { 
+          url: specificUrl, 
+          error: specificResult.error 
+        });
+      }
+    } catch (error) {
+      stats.errors++;
+      logger.error('Erro ao verificar URL específica', { 
+        url: specificUrl, 
+        error: String(error) 
+      });
+    }
+    
     logger.info('Iniciando processamento RSS', { 
       feedsCount: config.rssFeeds.length,
       patternsCount: config.patterns.length,
@@ -761,23 +890,88 @@ async function processRSSFeed(env: Env): Promise<{ processed: number; saved: num
   }
 }
 
+// Sistema de autenticação por sessão
+async function generateSessionToken(): Promise<string> {
+  const array = new Uint8Array(32);
+  crypto.getRandomValues(array);
+  return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function createSession(env: Env, token: string): Promise<void> {
+  const expiresAt = Date.now() + (7 * 24 * 60 * 60 * 1000); // 7 dias
+  await env.COMMUNIQUE_STORE.put(`session:${token}`, JSON.stringify({ expiresAt }), {
+    expirationTtl: 7 * 24 * 60 * 60 // 7 dias em segundos
+  });
+}
+
+async function validateSession(env: Env, token: string | null): Promise<boolean> {
+  if (!token) return false;
+  try {
+    const sessionData = await env.COMMUNIQUE_STORE.get(`session:${token}`);
+    if (!sessionData) return false;
+    const session = JSON.parse(sessionData) as { expiresAt: number };
+    return Date.now() < session.expiresAt;
+  } catch {
+    return false;
+  }
+}
+
+async function deleteSession(env: Env, token: string): Promise<void> {
+  await env.COMMUNIQUE_STORE.delete(`session:${token}`);
+}
+
+function getSessionToken(request: Request): string | null {
+  const cookieHeader = request.headers.get('Cookie');
+  if (!cookieHeader) return null;
+  const cookies = cookieHeader.split(';').map(c => c.trim());
+  const sessionCookie = cookies.find(c => c.startsWith('admin_session='));
+  if (!sessionCookie) return null;
+  return sessionCookie.split('=')[1] || null;
+}
+
 // Middleware de autenticação para rotas admin
-function requireAdmin(env: Env) {
-  return (request: Request): Response | undefined => {
-    if (!env.ADMIN_KEY) {
-      return undefined; // Sem proteção se não configurado
-    }
+async function requireAdmin(env: Env, request: Request): Promise<Response | null> {
+  // Se não tiver ADMIN_KEY configurado, permite acesso (desenvolvimento)
+  if (!env.ADMIN_KEY || env.ADMIN_KEY.trim() === '') {
+    logger.warn('ADMIN_KEY não configurado, permitindo acesso sem autenticação');
+    return null;
+  }
 
-    const authHeader = request.headers.get('X-ADMIN-KEY');
-    if (authHeader !== env.ADMIN_KEY) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
+  // Verifica sessão primeiro
+  const sessionToken = getSessionToken(request);
+  if (sessionToken && await validateSession(env, sessionToken)) {
+    return null; // Autenticado
+  }
 
-    return undefined;
-  };
+  // Fallback para header (compatibilidade)
+  const authHeader = request.headers.get('X-ADMIN-KEY');
+  if (authHeader && authHeader === env.ADMIN_KEY) {
+    return null; // Autenticado via header
+  }
+
+  // Não autenticado
+  logger.warn('Tentativa de acesso não autorizado', { 
+    hasSession: !!sessionToken,
+    hasHeader: !!authHeader
+  });
+  
+  // Se for requisição HTML, redireciona para login
+  const acceptHeader = request.headers.get('Accept') || '';
+  if (acceptHeader.includes('text/html')) {
+    return new Response(null, {
+      status: 302,
+      headers: { 'Location': '/admin/login' }
+    });
+  }
+  
+  // Para API, retorna JSON
+  return new Response(JSON.stringify({ 
+    error: 'Unauthorized',
+    message: 'Autenticação necessária. Acesse /admin/login'
+  }), {
+    status: 401,
+    headers: { 'Content-Type': 'application/json' }
+  });
 }
 
 // Helper para adicionar headers CORS
@@ -816,9 +1010,261 @@ function addCorsHeaders(response: Response, origin?: string | null): Response {
 // Router
 const router = Router();
 
+// Rota de login
+router.get('/admin/login', async (request: Request, env: Env) => {
+  // Se já estiver autenticado, redireciona para o admin
+  const sessionToken = getSessionToken(request);
+  if (sessionToken && await validateSession(env, sessionToken)) {
+    return new Response(null, {
+      status: 302,
+      headers: { 'Location': '/admin' }
+    });
+  }
+
+  const loginHtml = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Admin ComShalom</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .login-container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+            max-width: 400px;
+            width: 100%;
+        }
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .logo h1 {
+            font-size: 2em;
+            color: #1d1d1f;
+            margin-bottom: 8px;
+        }
+        .logo p {
+            color: #86868b;
+            font-size: 0.9em;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #1d1d1f;
+            font-weight: 500;
+            font-size: 0.9em;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e5e5e7;
+            border-radius: 8px;
+            font-size: 1em;
+            transition: border-color 0.2s;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: #0071e3;
+        }
+        .btn-login {
+            width: 100%;
+            padding: 14px;
+            background: #0071e3;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .btn-login:hover {
+            background: #0051a5;
+        }
+        .btn-login:disabled {
+            background: #86868b;
+            cursor: not-allowed;
+        }
+        .error-message {
+            background: #fff5f5;
+            border: 1px solid #ffcccc;
+            color: #c33;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 0.9em;
+            display: none;
+        }
+        .error-message.show {
+            display: block;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            margin-top: 10px;
+        }
+        .loading.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="logo">
+            <h1>🔐 Admin</h1>
+            <p>ComShalom Monitor</p>
+        </div>
+        <div class="error-message" id="errorMessage"></div>
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="password">Senha</label>
+                <input type="password" id="password" name="password" required autofocus>
+            </div>
+            <button type="submit" class="btn-login" id="loginBtn">Entrar</button>
+            <div class="loading" id="loading">Carregando...</div>
+        </form>
+    </div>
+    <script>
+        const form = document.getElementById('loginForm');
+        const passwordInput = document.getElementById('password');
+        const loginBtn = document.getElementById('loginBtn');
+        const errorMessage = document.getElementById('errorMessage');
+        const loading = document.getElementById('loading');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const password = passwordInput.value;
+            if (!password) {
+                showError('Por favor, insira a senha');
+                return;
+            }
+
+            loginBtn.disabled = true;
+            loading.classList.add('show');
+            errorMessage.classList.remove('show');
+
+            try {
+                const response = await fetch('/admin/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ password })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    window.location.href = '/admin';
+                } else {
+                    showError(data.error || 'Senha incorreta');
+                    passwordInput.value = '';
+                    passwordInput.focus();
+                }
+            } catch (error) {
+                showError('Erro ao conectar. Tente novamente.');
+            } finally {
+                loginBtn.disabled = false;
+                loading.classList.remove('show');
+            }
+        });
+
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.classList.add('show');
+        }
+    </script>
+</body>
+</html>`;
+
+  return new Response(loginHtml, {
+    headers: { 'Content-Type': 'text/html; charset=utf-8' }
+  });
+});
+
+// Rota POST de login
+router.post('/admin/login', async (request: Request, env: Env) => {
+  try {
+    const body = await request.json() as { password?: string };
+    const password = body.password;
+
+    if (!env.ADMIN_KEY || env.ADMIN_KEY.trim() === '') {
+      return new Response(JSON.stringify({ 
+        error: 'ADMIN_KEY não configurado no servidor' 
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    if (!password || password !== env.ADMIN_KEY) {
+      logger.warn('Tentativa de login com senha incorreta');
+      return new Response(JSON.stringify({ 
+        error: 'Senha incorreta' 
+      }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    // Cria sessão
+    const sessionToken = await generateSessionToken();
+    await createSession(env, sessionToken);
+
+    // Retorna resposta com cookie
+    const response = new Response(JSON.stringify({ success: true }), {
+      headers: { 
+        'Content-Type': 'application/json',
+        'Set-Cookie': `admin_session=${sessionToken}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${7 * 24 * 60 * 60}`
+      }
+    });
+
+    return response;
+  } catch (error) {
+    logger.error('Erro no login', { error: String(error) });
+    return new Response(JSON.stringify({ 
+      error: 'Erro interno do servidor' 
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+});
+
+// Rota de logout
+router.post('/admin/logout', async (request: Request, env: Env) => {
+  const sessionToken = getSessionToken(request);
+  if (sessionToken) {
+    await deleteSession(env, sessionToken);
+  }
+
+  return new Response(JSON.stringify({ success: true }), {
+    headers: { 
+      'Content-Type': 'application/json',
+      'Set-Cookie': 'admin_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0'
+    }
+  });
+});
+
 // Rota admin: listar todos os comunicados (com paginação e cache)
 router.get('/admin/list', async (request: Request, env: Env, ctx: ExecutionContext) => {
-  const authCheck = requireAdmin(env)(request);
+  const authCheck = await requireAdmin(env, request);
   if (authCheck) return authCheck;
 
   // Rate limiting
@@ -1089,7 +1535,7 @@ async function saveAccessLog(
 }
 
 router.get('/admin/view/:id', async (request: Request, env: Env, ctx: ExecutionContext) => {
-  const authCheck = requireAdmin(env)(request);
+  const authCheck = await requireAdmin(env, request);
   if (authCheck) return authCheck;
 
   try {
@@ -1141,8 +1587,12 @@ router.get('/admin/view/:id', async (request: Request, env: Env, ctx: ExecutionC
 
 // Rota admin: painel principal com logs (DEVE VIR ANTES DA ROTA RAIZ)
 router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) => {
-  const authCheck = requireAdmin(env)(request);
-  if (authCheck) return authCheck;
+  logger.info('Rota /admin acessada', { url: request.url });
+  const authCheck = await requireAdmin(env, request);
+  if (authCheck) {
+    logger.warn('Acesso negado em /admin', { status: 401 });
+    return authCheck;
+  }
 
   try {
     // Busca logs de acesso
@@ -1185,17 +1635,87 @@ router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) =
       }
     }
 
+    // Calcula estatísticas detalhadas
+    const now = Date.now();
+    const last7Days = now - (7 * 24 * 60 * 60 * 1000);
+    const last30Days = now - (30 * 24 * 60 * 60 * 1000);
+    
+    const communiquesByDate = communiques.map(c => ({
+      ...c,
+      date: new Date(c.timestamp).getTime()
+    }));
+    
+    const recent7Days = communiquesByDate.filter(c => c.date >= last7Days).length;
+    const recent30Days = communiquesByDate.filter(c => c.date >= last30Days).length;
+    
+    const sortedByDate = [...communiquesByDate].sort((a, b) => b.date - a.date);
+    const lastProcessed = sortedByDate[0]?.timestamp || null;
+    const lastProcessedTime = lastProcessed ? new Date(lastProcessed).getTime() : null;
+    const timeSinceLast = lastProcessedTime ? now - lastProcessedTime : null;
+    
+    // Status do sistema
+    const systemStatus = timeSinceLast 
+      ? timeSinceLast < 2 * 60 * 60 * 1000 ? 'healthy' // < 2 horas
+      : timeSinceLast < 24 * 60 * 60 * 1000 ? 'warning' // < 24 horas
+      : 'error' // > 24 horas
+      : 'unknown';
+    
+    const successRate = communiques.length > 0 
+      ? Math.round((communiques.filter(item => item.publicUrl).length / communiques.length) * 100)
+      : 0;
+    
+    // Agrupa por dia para gráfico (últimos 7 dias)
+    const dailyData: Record<string, number> = {};
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(now - (i * 24 * 60 * 60 * 1000));
+      const dateKey = date.toISOString().split('T')[0];
+      dailyData[dateKey] = 0;
+    }
+    
+    communiquesByDate.forEach(c => {
+      const dateKey = new Date(c.timestamp).toISOString().split('T')[0];
+      if (dailyData.hasOwnProperty(dateKey)) {
+        dailyData[dateKey]++;
+      }
+    });
+    
+    const chartData = Object.entries(dailyData).map(([date, count]) => ({
+      date: new Date(date).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }),
+      count
+    }));
+    
+    const maxCount = Math.max(...chartData.map(d => d.count), 1);
+    
+    // Helper para calcular tempo relativo
+    function getTimeAgo(date: Date): string {
+      const diff = now - date.getTime();
+      const minutes = Math.floor(diff / 60000);
+      const hours = Math.floor(diff / 3600000);
+      const days = Math.floor(diff / 86400000);
+      
+      if (minutes < 1) return 'Agora';
+      if (minutes < 60) return `${minutes} min atrás`;
+      if (hours < 24) return `${hours}h atrás`;
+      return `${days} dias atrás`;
+    }
+    
     const stats = {
       total: communiques.length,
       withGitHub: communiques.filter(item => item.githubSha).length,
       withPublicUrl: communiques.filter(item => item.publicUrl).length,
       totalViews: logs.filter(l => l.type === 'view').length,
       totalCopies: logs.filter(l => l.type === 'copy').length,
-      lastProcessed: communiques.sort((a, b) => 
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-      )[0]?.timestamp || null
+      recent7Days,
+      recent30Days,
+      successRate,
+      systemStatus,
+      lastProcessed,
+      timeSinceLast,
+      chartData,
+      maxCount
     };
 
+    const baseUrl = new URL(request.url).origin;
     const html = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -1210,8 +1730,29 @@ router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) =
             color: #1d1d1f;
             padding: 20px;
         }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .header h1 { color: #1d1d1f; }
+        .btn-logout {
+            padding: 10px 20px;
+            background: #ff3b30;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        .btn-logout:hover {
+            background: #d32f2f;
+        }
         .container { max-width: 1400px; margin: 0 auto; }
-        h1 { margin-bottom: 30px; color: #1d1d1f; }
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -1220,26 +1761,237 @@ router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) =
         }
         .stat-card {
             background: white;
-            padding: 20px;
+            padding: 24px;
             border-radius: 12px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: all 0.2s;
+            border-left: 4px solid #0071e3;
+            position: relative;
+            overflow: hidden;
+        }
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .stat-card.success { border-left-color: #34c759; }
+        .stat-card.warning { border-left-color: #ff9500; }
+        .stat-card.error { border-left-color: #ff3b30; }
+        .stat-card.info { border-left-color: #0071e3; }
+        .stat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 12px;
+        }
+        .stat-icon {
+            font-size: 1.5em;
+            opacity: 0.8;
         }
         .stat-value {
-            font-size: 2em;
-            font-weight: 600;
-            color: #0071e3;
-            margin-bottom: 5px;
+            font-size: 2.5em;
+            font-weight: 700;
+            color: #1d1d1f;
+            margin-bottom: 4px;
+            line-height: 1;
         }
         .stat-label {
             color: #86868b;
             font-size: 0.9em;
+            font-weight: 500;
         }
-        .logs-section {
+        .stat-change {
+            font-size: 0.85em;
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #e5e5e7;
+        }
+        .stat-change.positive { color: #34c759; }
+        .stat-change.negative { color: #ff3b30; }
+        .status-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 500;
+        }
+        .status-indicator.healthy {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status-indicator.warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .status-indicator.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .status-indicator.unknown {
+            background: #e5e5e7;
+            color: #86868b;
+        }
+        .chart-container {
+            background: #f9f9f9;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 15px;
+        }
+        .chart-bars {
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+            height: 120px;
+            margin-top: 10px;
+        }
+        .chart-bar {
+            flex: 1;
+            background: linear-gradient(to top, #0071e3, #5ac8fa);
+            border-radius: 4px 4px 0 0;
+            min-height: 4px;
+            position: relative;
+            transition: all 0.3s;
+        }
+        .chart-bar:hover {
+            opacity: 0.8;
+            transform: scaleY(1.05);
+        }
+        .chart-labels {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 8px;
+            font-size: 0.8em;
+            color: #86868b;
+        }
+        .chart-value {
+            position: absolute;
+            top: -20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.75em;
+            font-weight: 600;
+            color: #1d1d1f;
+            white-space: nowrap;
+        }
+        .timeline {
+            margin-top: 20px;
+        }
+        .timeline-item {
+            display: flex;
+            gap: 12px;
+            padding: 12px;
+            border-left: 2px solid #e5e5e7;
+            margin-left: 12px;
+            margin-bottom: 12px;
+            position: relative;
+        }
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: -6px;
+            top: 16px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #0071e3;
+        }
+        .timeline-item:last-child {
+            border-left: none;
+        }
+        .timeline-content {
+            flex: 1;
+        }
+        .timeline-title {
+            font-weight: 500;
+            margin-bottom: 4px;
+            color: #1d1d1f;
+        }
+        .timeline-meta {
+            font-size: 0.85em;
+            color: #86868b;
+        }
+        .section {
             background: white;
             border-radius: 12px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
             padding: 20px;
             margin-top: 20px;
+        }
+        .section h2 {
+            margin-bottom: 15px;
+            color: #1d1d1f;
+        }
+        .search-box {
+            margin-bottom: 20px;
+        }
+        .search-box input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e5e5e7;
+            border-radius: 8px;
+            font-size: 1em;
+        }
+        .search-box input:focus {
+            outline: none;
+            border-color: #0071e3;
+        }
+        .communiques-list {
+            display: grid;
+            gap: 12px;
+        }
+        .communique-item {
+            padding: 16px;
+            border: 1px solid #e5e5e7;
+            border-radius: 8px;
+            transition: all 0.2s;
+        }
+        .communique-item:hover {
+            border-color: #0071e3;
+            background: #f9f9f9;
+        }
+        .communique-title {
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: #1d1d1f;
+        }
+        .communique-meta {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            font-size: 0.85em;
+            color: #86868b;
+            margin-bottom: 8px;
+        }
+        .communique-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85em;
+            text-decoration: none;
+            display: inline-block;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: #0071e3;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #0051a5;
+        }
+        .btn-secondary {
+            background: #f5f5f7;
+            color: #1d1d1f;
+            border: 1px solid #e5e5e7;
+        }
+        .btn-secondary:hover {
+            background: #e5e5e7;
         }
         .logs-table {
             width: 100%;
@@ -1283,84 +2035,299 @@ router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) =
             font-family: monospace;
             font-size: 0.9em;
         }
-        .no-logs {
+        .no-data {
             text-align: center;
             padding: 40px;
             color: #86868b;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #86868b;
+        }
+        .actions-section {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+            margin-top: 20px;
+        }
+        .action-card {
+            padding: 16px;
+            background: #f5f5f7;
+            border-radius: 8px;
+            border: 1px solid #e5e5e7;
+        }
+        .action-card a {
+            color: #0071e3;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .action-card a:hover {
+            text-decoration: underline;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>📊 Painel Administrativo</h1>
+        <div class="header">
+            <h1>📊 Painel Administrativo</h1>
+            <button class="btn-logout" onclick="logout()">🚪 Sair</button>
+        </div>
         
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-value">${stats.total}</div>
-                <div class="stat-label">Total de Comunicados</div>
+        <div class="section" style="margin-top: 0;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
+                <h2 style="margin: 0;">📊 Visão Geral</h2>
+                <div class="status-indicator ${stats.systemStatus}">
+                    <span>${stats.systemStatus === 'healthy' ? '✅' : stats.systemStatus === 'warning' ? '⚠️' : stats.systemStatus === 'error' ? '❌' : '❓'}</span>
+                    <span>${stats.systemStatus === 'healthy' ? 'Sistema Operacional' : stats.systemStatus === 'warning' ? 'Atenção Necessária' : stats.systemStatus === 'error' ? 'Sistema Inativo' : 'Status Desconhecido'}</span>
+                </div>
             </div>
-            <div class="stat-card">
-                <div class="stat-value">${stats.withGitHub}</div>
-                <div class="stat-label">Com GitHub</div>
+            
+            <div class="stats-grid">
+                <div class="stat-card info">
+                    <div class="stat-header">
+                        <div>
+                            <div class="stat-value">${stats.total}</div>
+                            <div class="stat-label">Total de Comunicados</div>
+                        </div>
+                        <div class="stat-icon">📄</div>
+                    </div>
+                    ${stats.recent7Days > 0 ? `<div class="stat-change positive">+${stats.recent7Days} nos últimos 7 dias</div>` : ''}
+                </div>
+                
+                <div class="stat-card success">
+                    <div class="stat-header">
+                        <div>
+                            <div class="stat-value">${stats.withPublicUrl}</div>
+                            <div class="stat-label">Publicados</div>
+                        </div>
+                        <div class="stat-icon">✅</div>
+                    </div>
+                    <div class="stat-change ${stats.successRate >= 90 ? 'positive' : stats.successRate >= 70 ? '' : 'negative'}">
+                        ${stats.successRate}% taxa de sucesso
+                    </div>
+                </div>
+                
+                <div class="stat-card info">
+                    <div class="stat-header">
+                        <div>
+                            <div class="stat-value">${stats.recent7Days}</div>
+                            <div class="stat-label">Últimos 7 Dias</div>
+                        </div>
+                        <div class="stat-icon">📈</div>
+                    </div>
+                    <div class="stat-change">
+                        ${stats.recent30Days} nos últimos 30 dias
+                    </div>
+                </div>
+                
+                <div class="stat-card warning">
+                    <div class="stat-header">
+                        <div>
+                            <div class="stat-value">${stats.totalViews}</div>
+                            <div class="stat-label">Visualizações</div>
+                        </div>
+                        <div class="stat-icon">👁️</div>
+                    </div>
+                    <div class="stat-change">
+                        ${stats.totalCopies} cópias registradas
+                    </div>
+                </div>
             </div>
-            <div class="stat-card">
-                <div class="stat-value">${stats.withPublicUrl}</div>
-                <div class="stat-label">Com URL Pública</div>
+            
+            ${stats.lastProcessed ? `
+            <div style="margin-top: 20px; padding: 16px; background: #f9f9f9; border-radius: 8px; font-size: 0.9em; color: #86868b;">
+                <strong>Último processamento:</strong> ${new Date(stats.lastProcessed).toLocaleString('pt-BR')}
+                ${stats.timeSinceLast ? ` (${Math.floor(stats.timeSinceLast / (60 * 60 * 1000))}h atrás)` : ''}
             </div>
-            <div class="stat-card">
-                <div class="stat-value">${stats.totalViews}</div>
-                <div class="stat-label">Visualizações</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${stats.totalCopies}</div>
-                <div class="stat-label">Cópias</div>
+            ` : ''}
+        </div>
+        
+        <div class="section">
+            <h2>📈 Tendência (Últimos 7 Dias)</h2>
+            <div class="chart-container">
+                <div class="chart-bars">
+                    ${stats.chartData.map((d, i) => `
+                        <div class="chart-bar" style="height: ${(d.count / stats.maxCount) * 100}%" title="${d.date}: ${d.count} comunicado${d.count !== 1 ? 's' : ''}">
+                            ${d.count > 0 ? `<span class="chart-value">${d.count}</span>` : ''}
+                        </div>
+                    `).join('')}
+                </div>
+                <div class="chart-labels">
+                    ${stats.chartData.map(d => `<span>${d.date}</span>`).join('')}
+                </div>
             </div>
         </div>
 
-        <div class="logs-section">
+        <div class="section">
+            <h2>📋 Comunicados</h2>
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="Buscar comunicados..." onkeyup="searchCommuniques()">
+            </div>
+            <div id="communiquesContainer" class="loading">Carregando comunicados...</div>
+        </div>
+
+        <div class="section">
+            <h2>🕐 Atividades Recentes</h2>
+            <div class="timeline">
+                ${logs.slice(0, 10).map(log => {
+                    const timeAgo = getTimeAgo(new Date(log.timestamp));
+                    return `
+                    <div class="timeline-item">
+                        <div class="timeline-content">
+                            <div class="timeline-title">
+                                ${log.type === 'view' ? '👁️ Visualização' : '📋 Cópia'} - ${escapeHtml(log.communiqueTitle)}
+                            </div>
+                            <div class="timeline-meta">
+                                ${timeAgo} • IP: ${log.ip} ${log.referer !== 'direct' ? `• ${escapeHtml(log.referer.substring(0, 50))}${log.referer.length > 50 ? '...' : ''}` : ''}
+                            </div>
+                        </div>
+                    </div>
+                    `;
+                }).join('')}
+                ${logs.length === 0 ? '<div class="no-data">Nenhuma atividade recente</div>' : ''}
+            </div>
+        </div>
+        
+        <div class="section">
             <h2>📋 Logs de Acesso (Últimos 100)</h2>
-            ${logs.length === 0 ? '<div class="no-logs">Nenhum log encontrado</div>' : `
-            <table class="logs-table">
-                <thead>
-                    <tr>
-                        <th>Tipo</th>
-                        <th>Comunicado</th>
-                        <th>Data/Hora</th>
-                        <th>IP</th>
-                        <th>Referer</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${logs.map(log => `
-                    <tr>
-                        <td>
-                            <span class="badge badge-${log.type}">${log.type === 'view' ? '👁️ Visualização' : '📋 Cópia'}</span>
-                        </td>
-                        <td>
-                            <strong>${escapeHtml(log.communiqueTitle)}</strong><br>
-                            <small style="color: #86868b;">ID: ${log.communiqueId}</small>
-                        </td>
-                        <td class="timestamp">${new Date(log.timestamp).toLocaleString('pt-BR')}</td>
-                        <td class="ip">${log.ip}</td>
-                        <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(log.referer)}">
-                            ${log.referer === 'direct' ? '<em>Direto</em>' : escapeHtml(log.referer)}
-                        </td>
-                    </tr>
-                    `).join('')}
-                </tbody>
-            </table>
+            ${logs.length === 0 ? '<div class="no-data">Nenhum log encontrado</div>' : `
+            <div style="overflow-x: auto;">
+                <table class="logs-table">
+                    <thead>
+                        <tr>
+                            <th>Tipo</th>
+                            <th>Comunicado</th>
+                            <th>Data/Hora</th>
+                            <th>IP</th>
+                            <th>Referer</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${logs.map(log => `
+                        <tr>
+                            <td>
+                                <span class="badge badge-${log.type}">${log.type === 'view' ? '👁️ Visualização' : '📋 Cópia'}</span>
+                            </td>
+                            <td>
+                                <strong>${escapeHtml(log.communiqueTitle)}</strong><br>
+                                <small style="color: #86868b;">ID: ${log.communiqueId}</small>
+                            </td>
+                            <td class="timestamp">${new Date(log.timestamp).toLocaleString('pt-BR')}</td>
+                            <td class="ip">${log.ip}</td>
+                            <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(log.referer)}">
+                                ${log.referer === 'direct' ? '<em>Direto</em>' : escapeHtml(log.referer)}
+                            </td>
+                        </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
             `}
         </div>
 
-        <div style="margin-top: 30px; padding: 20px; background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
-            <h3>🔗 Links Úteis</h3>
-            <ul style="list-style: none; margin-top: 10px;">
-                <li style="margin: 8px 0;"><a href="/admin/list" style="color: #0071e3; text-decoration: none;">📋 Listar Comunicados</a></li>
-                <li style="margin: 8px 0;"><a href="/admin/stats" style="color: #0071e3; text-decoration: none;">📊 Estatísticas (JSON)</a></li>
-                <li style="margin: 8px 0;"><a href="/admin/reprocess" style="color: #0071e3; text-decoration: none;">🔄 Reprocessar Itens</a></li>
-            </ul>
+        <div class="section">
+            <h2>🔗 Ações</h2>
+            <div class="actions-section">
+                <div class="action-card">
+                    <strong>📊 Estatísticas</strong>
+                    <p style="margin-top: 8px; font-size: 0.9em; color: #86868b;">Ver estatísticas detalhadas</p>
+                    <a href="/admin/stats" target="_blank">Ver JSON →</a>
+                </div>
+                <div class="action-card">
+                    <strong>🔄 Reprocessar</strong>
+                    <p style="margin-top: 8px; font-size: 0.9em; color: #86868b;">Reprocessar itens sem cópia</p>
+                    <a href="/admin/reprocess" target="_blank">Executar →</a>
+                </div>
+                <div class="action-card">
+                    <strong>🔄 Recriar Todas</strong>
+                    <p style="margin-top: 8px; font-size: 0.9em; color: #86868b;">Recriar todas as páginas</p>
+                    <a href="/admin/recreate-all" target="_blank">Executar →</a>
+                </div>
+            </div>
         </div>
     </div>
+    <script>
+        let allCommuniques = [];
+        
+        function getTimeAgo(date) {
+            const now = new Date();
+            const diff = now - date;
+            const minutes = Math.floor(diff / 60000);
+            const hours = Math.floor(diff / 3600000);
+            const days = Math.floor(diff / 86400000);
+            
+            if (minutes < 1) return 'Agora';
+            if (minutes < 60) return \`\${minutes} min atrás\`;
+            if (hours < 24) return \`\${hours}h atrás\`;
+            return \`\${days} dias atrás\`;
+        }
+        
+        async function loadCommuniques() {
+            try {
+                const response = await fetch('/admin/list?limit=100');
+                if (!response.ok) throw new Error('Erro ao carregar');
+                const data = await response.json();
+                allCommuniques = data.items || [];
+                renderCommuniques(allCommuniques);
+            } catch (error) {
+                document.getElementById('communiquesContainer').innerHTML = 
+                    '<div class="no-data">Erro ao carregar comunicados</div>';
+            }
+        }
+        
+        function renderCommuniques(communiques) {
+            const container = document.getElementById('communiquesContainer');
+            if (communiques.length === 0) {
+                container.innerHTML = '<div class="no-data">Nenhum comunicado encontrado</div>';
+                return;
+            }
+            
+            container.innerHTML = '<div class="communiques-list">' + communiques.map(item => {
+                const date = new Date(item.timestamp);
+                const formattedDate = date.toLocaleString('pt-BR');
+                return \`
+                    <div class="communique-item">
+                        <div class="communique-title">\${escapeHtml(item.title)}</div>
+                        <div class="communique-meta">
+                            <span>📅 \${formattedDate}</span>
+                            \${item.publicUrl ? '<span>✅ Publicado</span>' : '<span>⚠️ Não publicado</span>'}
+                        </div>
+                        <div class="communique-actions">
+                            \${item.publicUrl ? \`<a href="\${item.publicUrl}" target="_blank" class="btn btn-primary">Ver Página</a>\` : ''}
+                            \${item.githubUrl ? \`<a href="\${item.githubUrl}" target="_blank" class="btn btn-secondary">GitHub</a>\` : ''}
+                            <a href="/admin/view/\${item.id}" target="_blank" class="btn btn-secondary">Ver HTML</a>
+                            \${item.url ? \`<a href="\${item.url}" target="_blank" class="btn btn-secondary">Fonte</a>\` : ''}
+                        </div>
+                    </div>
+                \`;
+            }).join('') + '</div>';
+        }
+        
+        function searchCommuniques() {
+            const search = document.getElementById('searchInput').value.toLowerCase();
+            const filtered = allCommuniques.filter(item => 
+                item.title.toLowerCase().includes(search) ||
+                (item.url && item.url.toLowerCase().includes(search))
+            );
+            renderCommuniques(filtered);
+        }
+        
+        async function logout() {
+            if (confirm('Deseja realmente sair?')) {
+                await fetch('/admin/logout', { method: 'POST' });
+                window.location.href = '/admin/login';
+            }
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        loadCommuniques();
+    </script>
 </body>
 </html>`;
 
@@ -2033,7 +3000,7 @@ async function checkPageExists(env: Env, uuid: string): Promise<boolean> {
 
 // Rota admin: recriar todas as páginas do zero
 router.get('/admin/recreate-all', async (request: Request, env: Env, ctx: ExecutionContext) => {
-  const authCheck = requireAdmin(env)(request);
+  const authCheck = await requireAdmin(env, request);
   if (authCheck) return authCheck;
 
   try {
@@ -2127,7 +3094,7 @@ router.get('/admin/recreate-all', async (request: Request, env: Env, ctx: Execut
 
 // Rota admin: reprocessar itens sem cópia no GitHub
 router.get('/admin/reprocess', async (request: Request, env: Env, ctx: ExecutionContext) => {
-  const authCheck = requireAdmin(env)(request);
+  const authCheck = await requireAdmin(env, request);
   if (authCheck) return authCheck;
 
   try {
@@ -2257,7 +3224,7 @@ router.get('/health', async (request: Request, env: Env, ctx: ExecutionContext) 
 
 // Rota admin: estatísticas
 router.get('/admin/stats', async (request: Request, env: Env, ctx: ExecutionContext) => {
-  const authCheck = requireAdmin(env)(request);
+  const authCheck = await requireAdmin(env, request);
   if (authCheck) return authCheck;
 
   try {
@@ -2362,6 +3329,12 @@ export default {
       if (response) {
         return addCorsHeaders(response, origin);
       }
+      // Log para debug quando rota não é encontrada
+      logger.warn('Rota não encontrada', { 
+        method: request.method, 
+        url: request.url,
+        pathname: new URL(request.url).pathname 
+      });
       return addCorsHeaders(new Response('Not Found', { status: 404 }), origin);
     });
   },

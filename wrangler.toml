@@ -8,9 +8,9 @@ binding = "COMMUNIQUE_STORE"
 id = "833920d9f8ef48e5841372d333536723"
 preview_id = "97942203971a4695bc95b667247a28f0"
 
-# Cron Triggers (executa a cada 15 minutos)
+# Cron Triggers (executa a cada 2 minutos)
 [triggers]
-crons = ["*/15 * * * *"]
+crons = ["*/2 * * * *"]
 
 # Variáveis de ambiente (definir via wrangler secret put ou dashboard)
 # GITHUB_TOKEN (obrigatório)
