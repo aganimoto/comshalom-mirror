@@ -1058,6 +1058,36 @@ function renderCommuniqueHTML(communique: Communique, baseUrl: string, viewUrl: 
 }
 
 // Rota admin: visualizar HTML de um comunicado
+// Função para salvar log de visualização/cópia
+async function saveAccessLog(
+  kv: KVNamespace,
+  type: 'view' | 'copy',
+  communiqueId: string,
+  communiqueTitle: string,
+  request: Request
+): Promise<void> {
+  try {
+    const logEntry = {
+      type,
+      communiqueId,
+      communiqueTitle,
+      timestamp: new Date().toISOString(),
+      ip: request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown',
+      userAgent: request.headers.get('User-Agent') || 'unknown',
+      referer: request.headers.get('Referer') || 'direct'
+    };
+    
+    const logKey = `access_log:${Date.now()}:${Math.random().toString(36).substring(7)}`;
+    await kv.put(logKey, JSON.stringify(logEntry), {
+      expirationTtl: 86400 * 30 // 30 dias
+    });
+    
+    logger.info(`Log de ${type} salvo`, { communiqueId, communiqueTitle });
+  } catch (error) {
+    logger.warn('Erro ao salvar log de acesso', { error: String(error) });
+  }
+}
+
 router.get('/admin/view/:id', async (request: Request, env: Env, ctx: ExecutionContext) => {
   const authCheck = requireAdmin(env)(request);
   if (authCheck) return authCheck;
@@ -1085,6 +1115,12 @@ router.get('/admin/view/:id', async (request: Request, env: Env, ctx: ExecutionC
 
     const communique = JSON.parse(value) as Communique;
     
+    // Salva log de visualização (não bloqueia a resposta)
+    ctx.waitUntil(
+      saveAccessLog(env.COMMUNIQUE_STORE, 'view', id, communique.title, request)
+        .catch(err => logger.warn('Erro ao salvar log', { error: String(err) }))
+    );
+    
     // Cria um wrapper HTML melhorado para visualização
     const baseUrl = new URL(request.url).origin;
     const viewUrl = `${baseUrl}/admin/view/${id}`;
@@ -1100,6 +1136,65 @@ router.get('/admin/view/:id', async (request: Request, env: Env, ctx: ExecutionC
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     });
+  }
+});
+
+// Rota para interceptar acessos às páginas públicas e registrar logs
+router.get('/pages/:uuid', async (request: Request, env: Env, ctx: ExecutionContext) => {
+  try {
+    const url = new URL(request.url);
+    const match = url.pathname.match(/\/pages\/([^\/]+)/);
+    const uuid = match ? match[1] : null;
+    
+    if (!uuid) {
+      return new Response('Not found', { status: 404 });
+    }
+
+    // Busca comunicado pelo UUID
+    const keys = await env.COMMUNIQUE_STORE.list();
+    let communique: Communique | null = null;
+    let communiqueId: string | null = null;
+
+    for (const key of keys.keys) {
+      if (key.name.startsWith('access_log:')) continue;
+      const value = await env.COMMUNIQUE_STORE.get(key.name);
+      if (value) {
+        try {
+          const item = JSON.parse(value) as Communique;
+          if (item.uuid === uuid) {
+            communique = item;
+            communiqueId = key.name;
+            break;
+          }
+        } catch (e) {
+          // Ignora itens inválidos
+        }
+      }
+    }
+
+    if (!communique || !communiqueId) {
+      return new Response('Comunicado não encontrado', { status: 404 });
+    }
+
+    // Salva log de cópia (não bloqueia a resposta)
+    ctx.waitUntil(
+      saveAccessLog(env.COMMUNIQUE_STORE, 'copy', communiqueId, communique.title, request)
+        .catch(err => logger.warn('Erro ao salvar log de cópia', { error: String(err) }))
+    );
+
+    // Retorna o HTML do comunicado
+    const baseUrl = new URL(request.url).origin;
+    const viewUrl = `${baseUrl}/admin/view/${communiqueId}`;
+    const wrappedHtml = renderCommuniqueHTML(communique, baseUrl, viewUrl);
+    
+    return new Response(wrappedHtml, {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8'
+      }
+    });
+  } catch (error) {
+    logger.error('Erro ao servir página pública', { error: String(error) });
+    return new Response('Erro interno', { status: 500 });
   }
 });
 
@@ -1918,6 +2013,242 @@ router.get('/health', async (request: Request, env: Env, ctx: ExecutionContext) 
       error: String(error),
       timestamp: new Date().toISOString()
     }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+});
+
+// Rota admin: painel principal com logs
+router.get('/admin', async (request: Request, env: Env, ctx: ExecutionContext) => {
+  const authCheck = requireAdmin(env)(request);
+  if (authCheck) return authCheck;
+
+  try {
+    // Busca logs de acesso
+    const logKeys = await env.COMMUNIQUE_STORE.list({ prefix: 'access_log:' });
+    const logs: Array<{
+      type: string;
+      communiqueId: string;
+      communiqueTitle: string;
+      timestamp: string;
+      ip: string;
+      userAgent: string;
+      referer: string;
+    }> = [];
+
+    for (const key of logKeys.keys.slice(-100)) { // Últimos 100 logs
+      const value = await env.COMMUNIQUE_STORE.get(key.name);
+      if (value) {
+        try {
+          logs.push(JSON.parse(value));
+        } catch (e) {
+          // Ignora logs inválidos
+        }
+      }
+    }
+
+    // Ordena por timestamp (mais recentes primeiro)
+    logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    // Busca lista de comunicados para estatísticas
+    const communiqueKeys = await env.COMMUNIQUE_STORE.list();
+    const communiques: Communique[] = [];
+    for (const key of communiqueKeys.keys) {
+      const value = await env.COMMUNIQUE_STORE.get(key.name);
+      if (value && !key.name.startsWith('access_log:')) {
+        try {
+          communiques.push(JSON.parse(value) as Communique);
+        } catch (e) {
+          // Ignora itens inválidos
+        }
+      }
+    }
+
+    const stats = {
+      total: communiques.length,
+      withGitHub: communiques.filter(item => item.githubSha).length,
+      withPublicUrl: communiques.filter(item => item.publicUrl).length,
+      totalViews: logs.filter(l => l.type === 'view').length,
+      totalCopies: logs.filter(l => l.type === 'copy').length,
+      lastProcessed: communiques.sort((a, b) => 
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      )[0]?.timestamp || null
+    };
+
+    const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin - ComShalom Monitor</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f7;
+            color: #1d1d1f;
+            padding: 20px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 { margin-bottom: 30px; color: #1d1d1f; }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .stat-value {
+            font-size: 2em;
+            font-weight: 600;
+            color: #0071e3;
+            margin-bottom: 5px;
+        }
+        .stat-label {
+            color: #86868b;
+            font-size: 0.9em;
+        }
+        .logs-section {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            padding: 20px;
+            margin-top: 20px;
+        }
+        .logs-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        .logs-table th,
+        .logs-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e5e5e7;
+        }
+        .logs-table th {
+            background: #f5f5f7;
+            font-weight: 600;
+            color: #1d1d1f;
+        }
+        .logs-table tr:hover {
+            background: #f9f9f9;
+        }
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: 500;
+        }
+        .badge-view {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        .badge-copy {
+            background: #f3e5f5;
+            color: #7b1fa2;
+        }
+        .timestamp {
+            color: #86868b;
+            font-size: 0.9em;
+        }
+        .ip {
+            font-family: monospace;
+            font-size: 0.9em;
+        }
+        .no-logs {
+            text-align: center;
+            padding: 40px;
+            color: #86868b;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 Painel Administrativo</h1>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">${stats.total}</div>
+                <div class="stat-label">Total de Comunicados</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${stats.withGitHub}</div>
+                <div class="stat-label">Com GitHub</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${stats.withPublicUrl}</div>
+                <div class="stat-label">Com URL Pública</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${stats.totalViews}</div>
+                <div class="stat-label">Visualizações</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${stats.totalCopies}</div>
+                <div class="stat-label">Cópias</div>
+            </div>
+        </div>
+
+        <div class="logs-section">
+            <h2>📋 Logs de Acesso (Últimos 100)</h2>
+            ${logs.length === 0 ? '<div class="no-logs">Nenhum log encontrado</div>' : `
+            <table class="logs-table">
+                <thead>
+                    <tr>
+                        <th>Tipo</th>
+                        <th>Comunicado</th>
+                        <th>Data/Hora</th>
+                        <th>IP</th>
+                        <th>Referer</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${logs.map(log => `
+                    <tr>
+                        <td>
+                            <span class="badge badge-${log.type}">${log.type === 'view' ? '👁️ Visualização' : '📋 Cópia'}</span>
+                        </td>
+                        <td>
+                            <strong>${escapeHtml(log.communiqueTitle)}</strong><br>
+                            <small style="color: #86868b;">ID: ${log.communiqueId}</small>
+                        </td>
+                        <td class="timestamp">${new Date(log.timestamp).toLocaleString('pt-BR')}</td>
+                        <td class="ip">${log.ip}</td>
+                        <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(log.referer)}">
+                            ${log.referer === 'direct' ? '<em>Direto</em>' : escapeHtml(log.referer)}
+                        </td>
+                    </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+            `}
+        </div>
+
+        <div style="margin-top: 30px; padding: 20px; background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+            <h3>🔗 Links Úteis</h3>
+            <ul style="list-style: none; margin-top: 10px;">
+                <li style="margin: 8px 0;"><a href="/admin/list" style="color: #0071e3; text-decoration: none;">📋 Listar Comunicados</a></li>
+                <li style="margin: 8px 0;"><a href="/admin/stats" style="color: #0071e3; text-decoration: none;">📊 Estatísticas (JSON)</a></li>
+                <li style="margin: 8px 0;"><a href="/admin/reprocess" style="color: #0071e3; text-decoration: none;">🔄 Reprocessar Itens</a></li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>`;
+
+    return new Response(html, {
+      headers: { 'Content-Type': 'text/html; charset=utf-8' }
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({ error: String(error) }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     });
